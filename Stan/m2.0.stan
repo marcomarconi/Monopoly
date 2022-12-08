@@ -1,3 +1,4 @@
+// Inflation/Interest rate in a SSM-style
 functions {
   real logit_f (real x, real m, real b) {
     return(1 / (1 + exp(-b*(x-m))));
