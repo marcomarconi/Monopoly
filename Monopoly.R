@@ -123,10 +123,14 @@ newnames <- c( "WTI",
                
             )
 oil <- select(outlook, c("Date", cols)) %>% rename_at(vars(cols), function(x) newnames)
-oil$GasolineSpread <- oil$Gasoline*0.42 - oil$Brent
-oil$HoSpread <- oil$HeatingOil*0.42 - oil$Brent
+oil$OilSpread <- oil$WTI - oil$Brent #
+oil$GasolineSpread <- oil$Gasoline*0.42 - oil$Brent # 
+oil$HoSpread <- oil$HeatingOil*0.42 - oil$Brent #
 oil$DieselSpread <- oil$DieselFuel*0.42 - oil$Brent
 oil$JetfuelSpread <- oil$JetFuel*0.42 - oil$Brent
+oil$GasolineDieselSpread <- oil$Gasoline - oil$DieselFuel
+oil$GasolineHoSpread <- oil$Gasoline - oil$HeatingOil
+oil$HoDieselSpread <- oil$HeatingOil - oil$DieselFuel #
 oil <- mutate(oil, Month=month(Date), Season = case_when(month(Date) %in% c(12,1,2) ~ 1, month(Date) %in% c(3,4,5) ~ 2, month(Date) %in% c(6,7,8) ~ 3, month(Date) %in% c(9,10,11) ~ 4))
 LI <- read_csv("/home/marco/trading/Systems/Monopoly/Data/OECD//LeadingIndicators.csv", show_col_types = FALSE)
 CPI <- read_csv("/home/marco/trading/Systems/Monopoly/Data/OECD//CPI.csv", show_col_types = FALSE)
@@ -140,7 +144,10 @@ df <- rbind(LI, CPI,  PPI, TG, UR, MA)
 df <- filter(df, LOCATION=="USA") %>% select(INDICATOR,TIME,Value) %>% mutate(TIME=as.Date(paste0(TIME, "-01"), format="%Y-%m-%d")) %>% rename(Date=TIME) %>% dcast(Date ~ INDICATOR, value.var = "Value") %>% arrange(Date)
 Oil <- full_join(oil, df, by="Date")%>% arrange(Date) %>% mutate(Date = yearmonth(as.character(Date)))
 cot <- read_csv("/home/marco/trading/Systems/Monopoly/Data/Oil/COT_gasoline.csv", show_col_types = FALSE)
-cot <- mutate(cot, CommercialsNET = `Commercial Positions-Long (All)` /  (`Commercial Positions-Long (All)` + `Commercial Positions-Short (All)`), NonCommercialsNET = `Noncommercial Positions-Long (All)` /  (`Noncommercial Positions-Long (All)` + `Noncommercial Positions-Short (All)`)) %>% rename(Date = `As of Date in Form YYYY-MM-DD`) %>% select(Date, CommercialsNET, NonCommercialsNET)%>% mutate(Date = yearmonth(as.character(Date)))
+cot <- mutate(cot, CommercialsNET = `Commercial Positions-Long (All)` /  (`Commercial Positions-Long (All)` + `Commercial Positions-Short (All)`), 
+                   NonCommercialsNET = `Noncommercial Positions-Long (All)` /  (`Noncommercial Positions-Long (All)` + `Noncommercial Positions-Short (All)`)) %>% 
+                   rename(Date = `As of Date in Form YYYY-MM-DD`) %>% select(Date, CommercialsNET, NonCommercialsNET) %>% 
+                   mutate(Date = yearmonth(as.character(Date)))
 cot <- group_by(cot, Date) %>% summarise(Date=last(Date), COT_Gasoline_Commercials=last(CommercialsNET),
                                          COT_Gasoline_NonCommercials=last(NonCommercialsNET))
 Oil <- full_join(Oil, cot, by="Date")%>% arrange(Date)
@@ -155,7 +162,7 @@ cot <- mutate(cot, CommercialsNET = `Commercial Positions-Long (All)` /  (`Comme
 cot <- group_by(cot, Date) %>% summarise(Date=last(Date), COT_CrudeOil_Commercials=last(CommercialsNET),
                                                            COT_CrudeOil_NonCommercials=last(NonCommercialsNET))
 Oil <- full_join(Oil, cot, by="Date")%>% arrange(Date)
-for(i in 2:ncol(Oil)) Oil[,paste0(colnames(Oil)[i], "_S")] <- Oil[,i] - lag(Oil[,i])
+#for(i in 2:ncol(Oil)) Oil[,paste0(colnames(Oil)[i], "_S")] <- Oil[,i] - lag(Oil[,i])
 p <- ggplot(Oil , aes(Date, Motor_Gasoline_Supplied)) +  
   geom_line( col="gray") +
   geom_point( col=as.numeric(factor(Oil$Season)), size=3)
@@ -165,57 +172,120 @@ ggplotly(p)
 
 
 
-# Load future contracts
-{
-symbol <- "CL"
-setwd("/home/marco/trading/Historical Data/Barchart/CrudeOil/")
-cash <- read_csv("/home/marco/trading/Historical Data/Barchart/Cash/cty00.csv", show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time) %>% mutate(Date=as.Date(Date, format="%m/%d/%Y"))
+# Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
+load_future_contracts <- function(symbol, dir, order_file="order.txt") {
+  #cash <- read_csv("/home/marco/trading/Historical Data/Barchart/Cash/cty00.csv", show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time) %>% mutate(Date=as.Date(Date, format="%m/%d/%Y"))
+  files <- list()
+  for(l in list.files(dir, pattern = ".csv")) {
+    f <- read_csv(paste0(dir, "/", l), show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time)
+    f$Date <- as.Date(f$Date, format="%m/%d/%Y") 
+    f <- arrange(f, Date)
+    f <- rbind(data.frame(Date=f$Date[1]-1, Last=NaN), f, data.frame(Date=f$Date[length(f$Date)]+1, Last=NaN))
+    files[[sub(".csv", "", l)]] <- f
+  }
+  df <- Reduce(function(...) full_join(..., by="Date", all=T), files) %>% arrange(Date)
+  colnames(df) <- c("Date", names(files))
+  order <- scan(paste0(dir, "/", order_file), what="string") %>% tolower()
+  df <- df[,c("Date", order)] %>% arrange(Date)
+  #df <- merge(cash, df, by="Date", all=T) %>% rename(Cash=Last) %>% arrange(Date)
+  return(df)
+}
 
-files <- list()
-for(l in list.files(".", pattern = ".csv")) {
-  f <- read_csv(l, show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time)
-  f$Date <- as.Date(f$Date, format="%m/%d/%Y")
-  files[[sub(".csv", "", l)]] <- f
+# build up the rollover curve given a df from load_future_contracts
+rollover_curve <- function(df, forward=6) { # assume only N x T matrix, no Date or other columns
+  curve_diff <- rep(NA, nrow(df))
+  curve_lm <- rep(NA, nrow(df))
+  for(i in 1:nrow(df)) {
+    a <- df[i, ]
+    b <- na.omit(a)
+    if(length(b) < forward) 
+      next
+    b_log <- log(b)
+    x <- 1:length(b_log)
+    curve_lm[i] <- -12 * coef(lm(b_log ~ x))[2]
+    curve_diff[i] <- b[1] - b[forward] 
+  }
+  return(cbind(curve_lm, curve_diff))
 }
-df <- Reduce(function(...) full_join(..., by="Date", all=T), files) %>% arrange(Date)
-colnames(df) <- c("Date", names(files))
-order <- scan("order.txt", what="string") %>% tolower()
-df <- df[,c("Date", order)]
-df <- merge(cash, df, by="Date", all=T) %>% arrange(Date)
-curves <- list()
-for(i in 2:12){
-  b <- apply(df[,-1], 1, function(x) {a <- na.omit(unlist(x)); a["Last"] - a[i]})
-  z <- data.frame(Date=df$Date, m=month(df$Date), y=year(df$Date), b=b) %>% group_by(m,y) %>% summarise(Date=last(Date), b=last(b)) %>% arrange(Date) %>% ungroup %>% select(-m, -y)
-  #z$Date <- sub("-..$", "-01", z$Date) %>% as.Date(., format="%Y-%m-%d")
-  curves[[as.character(i)]] <- z
-}
-futures <- Reduce(function(...) full_join(..., by="Date", all=T), curves) %>% arrange(Date)
-futures <- merge(cash, futures, by="Date")
-colnames(futures) <- c("Date", symbol, paste0(symbol, "_b", 1:11))
-}
-Oil_extended <- 
-     merge(Oil, wti_futures_spreads %>% mutate(Date=yearmonth(Date)), by="Date") %>%
-     #merge(., brent_futures %>% mutate(Date=yearmonth(Date)), by="Date") %>% 
-     merge(., gasoline_futures_spreads %>% mutate(Date=yearmonth(Date)), by="Date") %>%
-     merge(., heatingoil_futures_spreads %>% mutate(Date=yearmonth(Date)), by="Date") 
 
-# Rollover curve
+# create a single future contract
+backadjust_future <- function(df, N=1) {
+  m <- as.matrix(df[,-1]) # the first column is supposed to be the Date
+  sc <- rep(NA, ncol(m))
+  ec <- rep(NA, ncol(m))
+  for(j in 1:ncol(m))
+    for(i in 1:nrow(m)){
+      if(is.nan(m[i,j])) {
+        if(is.na(sc[j]))
+          sc[j] <- i+1
+        else
+          ec[j] <- i-1
+      }
+    }
+  nearest <- rep(NA, nrow(m))
+  continous <- rep(NA, nrow(m))
+  adjs <- rep(0, nrow(m))
+  jump <- 0
+  j <- 1; 
+  i <- 1; 
+  while(i <= nrow(m)) {
+    # take note of the current adjustment between the current contract and the previous one
+    if(j < ncol(m)) {
+      n_jump <-  m[i,j+1] - m[i,j] 
+      if(!is.na(n_jump))
+        jump <- n_jump
+    }
+    if(i>1)
+      adjs[i] <- adjs[i-1] # keep the previous adjustment 
+    # rollback contract if:
+    # - we have not reached the last contract yet
+    # - we have reached at least the number of days from the end of current contract 
+    # - there is price on the next contract
+    # - it is not the last day
+    if(j < ncol(m) && i >= ec[j]-N+1 & !(is.na(m[i,j+1]) | is.nan(m[i,j+1])) & i < nrow(m)-1  ) {
+      cc <- 0
+      j <- j + 1
+      adjs[i] <- adjs[i] + jump # update the adjustment now that we rollback the contract
+    } 
+    if(j == ncol(m)+1)
+      break
+    nearest[i] <-  m[i,j] 
+    i <- i + 1
+  }
+  #adjs <- c(diff(adjs) %>% rev %>% cumsum %>% rev,0)
+  continous <- nearest + adjs
+  return(data.frame(Date=df[,1], Nearest=nearest, Continous=continous, Adjs=adjs))
+}
+
+# Load futures data and calculate rollover curves
 {
-df <- wti_futures_prices
-gamma <- rep(NA, nrow(df))
-for(i in 1:nrow(df)) {
-  a <- unlist(df[i, -c(1:2)])
-  if(sum(!is.na(a)) < 6) 
-    next
-  b <- log(as.vector(na.omit(a)))
-  x <- 1:length(b)
-  gamma[i] <- coef(lm(b ~ x))[2]
+  to_load <- list(c("CL", "/home/marco/trading/Historical Data/Barchart/CrudeOil/"),
+                  c("CB", "/home/marco/trading/Historical Data/Barchart/Brent//"),
+                  c("RB", "/home/marco/trading/Historical Data/Barchart/Gasoline/"),
+                  c("HO", "/home/marco/trading/Historical Data/Barchart/ULSDNYHArbor/"),
+                  c("LF", "/home/marco/trading/Historical Data/Barchart/Gasoil/"))
+  Futures <- list()
+  for(a in to_load) 
+    Futures[[a[1]]] <- load_future_contracts(a[1], a[2])
+  Curves <- list()
+  for(a in  names(Futures)) {
+    b <- as.data.frame(rollover_curve(as.matrix(Futures[[a]][,-1])))
+    colnames(b) <- c(paste0(a[1], "_lm"), paste0(a[1], "_diff"))
+    Curves[[a]] <- data.frame(Futures[[a]][,1], b)
+  }
+
+  
+  Oil_extended2 <- 
+    merge(Oil, Curves[["CL"]] %>%  mutate(Date=yearmonth(Date)) %>% group_by(Date) %>% 
+            summarise(across(everything(), last)), by="Date") %>% 
+    merge(., Curves[["RB"]] %>%  mutate(Date=yearmonth(Date)) %>% group_by(Date) %>% 
+            summarise(across(everything(), last)), by="Date") %>% 
+    merge(., Curves[["HO"]] %>%  mutate(Date=yearmonth(Date)) %>% group_by(Date) %>% 
+            summarise(across(everything(), last)), by="Date") %>% 
+    merge(., Curves[["LF"]] %>%  mutate(Date=yearmonth(Date)) %>% group_by(Date) %>% 
+            summarise(across(everything(), last)), by="Date") 
 }
-wti_futures_prices$gamma <- 100*gamma
-}
-Oil_extended <- merge(Oil_extended, wti_futures_prices %>% 
-                        select(Date, gamma) %>%  mutate(Date=yearmonth(Date)) %>% 
-                        group_by(Date) %>% summarize(Date=first(Date), gamma=last(gamma)), by="Date")
+
 
 
 # m0.1 simple spread model
@@ -544,11 +614,12 @@ matplot2(cbind(cumsum(na.omit(p_ssm*r)), cumsum(na.omit(p_ar*r)), cumsum(na.omit
 # m3.1 simple univariate seasonal model (with discrete fourier) and fixed level
 {
   par(mfrow=c(2,1), mar=c(2,2,1,0.5))
-  N <- 12
+  N <- 350
   sigma_y <- 0.25
-  sigma_x <- 3.65*0.01
+  sigma_x <- 3.65
   ar <- 0.85
-  level <- 2
+  level <- 3
+  theta <- c(0.5, 0.25)
   CC <- c(-0.75,1.94)
   cc <- matrix(0, ncol=length(CC), nrow=N)
   for(t in 5:N) {
@@ -557,15 +628,15 @@ matplot2(cbind(cumsum(na.omit(p_ssm*r)), cumsum(na.omit(p_ar*r)), cumsum(na.omit
   }
   m <- 1:length(y)
   x <- vector()
-  x[1] <- level / (1-ar)
+  x[1:3] <- level / (1-ar)
   y <- vector()
-  y[1] <- 1
-  for(t in 2:N) {
-    x[t] <- ar * (x[t-1] + level + cc[t,] %*% CC) + rnorm(1, 0, sigma_x)  
+  y[1:3] <- x[1:3]
+  for(t in 4:N) {
+    x[t] <- ar * x[t-1] + level + theta[1] * (x[t-1] - x[t-2]) + theta[2] * (x[t-2] - x[t-3]) + cc[t,] %*% CC + rnorm(1, 0, sigma_x)  
     y[t] <- x[t] + rnorm(1, 0, sigma_y)
   }
   plot(x, col="blue", type="l"); points(y, col="blue", pch=16);
-  lines( Oil$GasolineSpread %>% na.omit, type="l", col="red")
+  #lines( Oil$GasolineSpread %>% na.omit, type="l", col="red")
 }
 
 # m3.2 simple univariate seasonal model (with discrete fourier) and variable level
@@ -601,71 +672,74 @@ matplot2(cbind(cumsum(na.omit(p_ssm*r)), cumsum(na.omit(p_ar*r)), cumsum(na.omit
   lines( Oil$GasolineSpread %>% na.omit, type="l", col="green")
 }
 
+
+
 # m4.0 bivariate model
 {
-    par(mfrow=c(2,1), mar=c(2,2,1,0.5))
-    N <- 500
-    x <- matrix(NA, ncol=2, nrow=N)
-    y <- matrix(NA, ncol=2, nrow=N)
-    x[1,] <- c(0,0)
-    y[1,] <- x[1,]
-    ar_x <- c(0.95, 0.9)
-    level <- c(3, 2)
-    sigma_x <- c(3.5, 2)
-    sigma_y <- c(2, 2)
-    Sx <- diag(sigma_x) %*% matrix(c(1, 0.0, 0.0, 1), ncol=2, byrow=TRUE) %*% diag(sigma_x)
-    Sy <- diag(sigma_y) %*% matrix(c(1, 0.0, 0.0, 1), ncol=2, byrow=TRUE) %*% diag(sigma_y)
-    err_x <- rmvnorm(N, c(0,0), Sx)
-    err_y <- rmvnorm(N, c(0,0), Sy)
-    Z <- matrix(c(ar_x[1],0,0,ar_x[2]), ncol=2, byrow=TRUE)
-    CC <- matrix(c(-0.75,1.94,1,-0.5), 2, 2, byrow=TRUE) * 2
-    cc <- matrix(0, nrow=N, ncol=ncol(CC))
-    for(t in 1:N) {
-      for(i in seq(1, ncol(cc), 2))
-        cc[t,i:(i+1)] <- c(cos(2 * pi * i * t / 12), sin(2 * pi * i * t / 12))
+cov_GPL2 <- function(x, sq_alpha, sq_rho, delta) {
+  N = dim(x)[1];
+  K <- matrix(NA, N, N)
+  for (i in 1:(N-1)) {
+    K[i, i] = sq_alpha + delta[i];
+    for (j in (i + 1):N) {
+      K[i, j] = sq_alpha * exp(-sq_rho * (x[i,j])^2 );
+      K[j, i] = K[i, j];
     }
-    for(i in 2:N) {
-      x[i,] <- Z %*% x[i-1,] + level + CC %*% cc[i,] + err_x[i,]
-      y[i,] <- x[i,] + err_y[i,]
-    }
-    matplot(x, type="l", col="black"); grid()
-    matplot(y, pch=16, col=c("blue", "red"), add=TRUE)
   }
-  
-  
-
-
-
-# posterior checks for univariate SSM
-{
-  df <- Oil_extended  
-  y <- df$GasolineSpread %>% na.omit
-  d <- tail(df$Date, length(y))  
-  fit <- fit_m3.0
-  m_pred <-  fit$draws(variables = "m_pred")  %>% merge_chains %>% colMeans() %>% as.vector();
-  P_pred <-  fit$draws(variables = "P_pred")  %>% merge_chains %>% colMeans() %>% as.vector %>% sqrt
-  S <-  fit$draws(variables = "S")  %>% merge_chains %>% colMeans() %>% as.vector %>% sqrt; 
-  matplot(cbind(m_pred, m_pred-P_pred, m_pred+P_pred, m_pred-S, m_pred+S), col="black", lty=c(1, 2, 2, 3, 3), type="l")
-  abline(v=seq(1, length(y), by=12),lty=3)
-  points(y, pch=16, col="blue")
+  K[N, N] = sq_alpha + delta[N];
+  return (K);
+}  
+  par(mfrow=c(2,1), mar=c(2,2,1,0.5))
+  N <- 300
+  x <- matrix(NA, ncol=2, nrow=N)
+  y <- matrix(NA, ncol=2, nrow=N)
+  ar_x <- c(0.95, 0.95)
+  level <- c(3, 2)
+  sigma_x <- c(3.5, 2)
+  sigma_y <- c(2, 2)
+  Dmat <- matrix(c(1,0.55,0.55,1), 2, 2, byrow=TRUE)
+  Sx <- diag(sigma_x) %*% matrix(c(1, 0.5, 0.5, 1), ncol=2, byrow=TRUE) %*% diag(sigma_x)
+  #Sx <- cov_GPL2(Dmat, 1, 3, sigma_x)
+  Sy <- diag(sigma_y) %*% matrix(c(1, 0.0, 0.0, 1), ncol=2, byrow=TRUE) %*% diag(sigma_y)
+  err_x <- rmvnorm(N, c(0,0), Sx)
+  err_y <- rmvnorm(N, c(0,0), Sy)
+  Z <- matrix(c(ar_x[1],0,0,ar_x[2]), ncol=2, byrow=TRUE)
+  CC <- matrix(c(-0.75,1.94,1,-0.5), 2, 2, byrow=TRUE) 
+  cc <- matrix(0, nrow=N, ncol=ncol(CC))
+  for(t in 1:N) {
+    for(i in seq(1, ncol(cc), 2))
+      cc[t,i:(i+1)] <- c(cos(2 * pi * i * t / 12), sin(2 * pi * i * t / 12))
+  }
+  theta <- c(-0.25, 0.65)
+  x[1:3,] <- level / (1-ar)
+  y[1:3,] <- x[1:3,]
+  for(i in 4:N) {
+    x[i,] <-   x[i-1,]  + theta[1] * (y[i-1,] - y[i-2,]) + theta[2] * (y[i-2,] - y[i-3,])  + err_x[i,]#Z %*% x[i-1,] + level + CC %*% cc[i,] + err_x[i,]
+    y[i,] <- x[i,] +   err_y[i,]
+  }
+  matplot(x, type="l", col="black"); grid()
+  matplot(y, pch=16, col=c("blue", "red"), add=TRUE)
 }
+
+  
+
+
+
 
 # Execute backtest univariate
 {
-df <- Oil_extended  
-y <- df$HoSpread %>% na.omit
-x1 <- tail(df$HeatingOil, length(y))  
+df <- xx %>% tail(307)  
+y <- df$GasolineSpread %>% na.omit
+x1 <- tail(df$Gasoline, length(y))  
 x2 <- tail(df$Brent, length(y))
 d <- tail(df$Date, length(y))  
-fit <- fit_m3.0_heatingoil
-factor <- 10
+fit <- fit_
 par(mfrow=c(3,1), mar=c(2,2,1,0.5))
 # discrete positions
-m_pred <-  fit$draws(variables = "m_pred")  %>% merge_chains %>% colMeans() %>% as.vector(); m_pred <- head(m_pred, length(y))
-P_pred <-  fit$draws(variables = "P_pred")  %>% merge_chains %>% colMeans() %>% as.vector; P_pred <- sqrt(head(P_pred, length(y)))
+m_pred <-  fit$draws(variables = "y_hat")  %>% merge_chains %>% colMeans() %>% as.vector(); m_pred <- head(m_pred, length(y))
 S <-  fit$draws(variables = "S")  %>% merge_chains %>% colMeans() %>% as.vector; S <- sqrt(head(S, length(y)))
-df <- data.frame(Date=d, y=y, m=lead(m_pred), l=lead(m_pred-P_pred/factor), h=lead(m_pred+P_pred/factor))
-df$trade <- (with(df, ifelse(l>y & h>y, 1, ifelse(l<y & h<y, -1, 0)))) * 1 / S^2;
+df <- data.frame(Date=d, y=y, m=lead(m_pred))
+df$trade <- (with(df, ifelse(m>y, 1, ifelse(m<y, -1, 0)))) * 1 / S^2;
 # continuons positions
 # m_pred <-  fit$draws(variables = "m_pred")  %>% merge_chains %>% matrix(nrow=2000); m_pred <- head(m_pred, length(y))
 # p <- (lead(m_pred) - y) %>% apply(., 2, function(x) table(x>0)/length(x))
@@ -684,37 +758,58 @@ get_returns_statistics(data.frame(df$pnl), period = 12) %>% unlist
 }
 
 
-# Execute backtest univariate
+# Execute backtest multivariate
 {
-  df <- Oil_extended  
-  y <- cbind(df$GasolineSpread, df$HoSpread) %>% na.omit
-  x1_1 <- tail(df$Gasoline, nrow(y))  
-  x1_2 <- tail(df$HeatingOil, nrow(y))  
-  x2 <- tail(df$Brent, nrow(y))
+  # data
+  df <- Oil_extended2  
+  y <- cbind(df$OilSpread, df$GasolineSpread, df$HoSpread, df$DieselSpread, df$GasolineDieselSpread, df$GasolineHoSpread, df$HoDieselSpread) %>% na.omit
+  y <- cbind(df$OilSpread, df$GasolineSpread, df$HoSpread, df$GasolineDieselSpread,  df$HoDieselSpread) %>% na.omit
+  y <- cbind(df$OilSpread, df$GasolineSpread, df$HoSpread, df$HoDieselSpread) %>% na.omit
+  #y <- cbind(df$GasolineSpread, df$HoSpread) %>% na.omit
+  x1 <- cbind(
+             df$WTI,
+             df$Gasoline, 
+             df$HeatingOil,
+             #df$HeatingOil,
+             #df$Gasoline, 
+             #df$Gasoline,
+             df$HeatingOil
+            ) %>% tail(nrow(y))    
+  x2 <- cbind(
+              df$Brent, 
+              df$Brent,
+              df$Brent,
+              #df$Brent,
+              #df$DieselFuel,
+              #df$HeatingOil,
+              df$DieselFuel
+            ) %>% tail(nrow(y))    
   d <- tail(df$Date, nrow(y))  
-  fit <- fit_m4.0
+  fit <- fit_four_variational_garch_c__
+  # go
   par(mfrow=c(3,1), mar=c(2,2,1,0.5))
-  m_pred_1 <-  fit$draws(variables = "m_pred")  %>% merge_chains %>% colMeans() %>% as.vector(); m_pred_1 <- head(m_pred_1, nrow(y))
-  m_pred_2 <-  fit$draws(variables = "m_pred")  %>% merge_chains %>% colMeans() %>% as.vector(); m_pred_2 <- tail(m_pred_2, nrow(y))
-  S_1 <-  fit$draws(variables = "S")  %>% merge_chains %>% colMeans() %>% as.vector; S_1 <- sqrt(head(S_1, nrow(y)))
-  S_2 <-  fit$draws(variables = "S")  %>% merge_chains %>% colMeans() %>% as.vector; S_2 <- sqrt(tail(S_2, nrow(y)))
-  df <- data.frame(Date=d, y_1=y[,1], y_2=y[,2], m_1=lead(m_pred_1), m_2=lead(m_pred_2))
-  df$trade_1 <- (with(df, ifelse(m_1>y_1, 1, ifelse(m_1<y_1, -1, 0)))) #* 1 / S_1;
-  df$trade_2 <- (with(df, ifelse(m_2>y_2, 1, ifelse(m_2<y_2, -1, 0)))) #* 1 / S_2;
-  df$ret1_1 <- c(0, diff(log(x1_1)))
-  df$ret1_2 <-  c(0, diff(log(x1_2)))
-  df$ret2 <-  c(0, diff(log(x2)))
-  df$pnl_1 <- 0.25 * lag(df$trade_1) * (df$ret1_1 - df$ret2)
-  df$pnl_2 <- 0.25 * lag(df$trade_2) * (df$ret1_2 - df$ret2)
-  df$pnl_1[is.na(df$pnl_1)] <- 0
-  df$pnl_2[is.na(df$pnl_2)] <- 0
-  df$pnl <- df$pnl_1 + df$pnl_2
-  plot(cumsum(df$pnl))
-  #colors <- df$pnl; colors[colors>0] <- "blue"; colors[colors<0] <- "red"
-  #plot(df$Date, df$y %>% scale, pch=16, type="o", col=colors, cex=2); lines(df$Date, df$y %>% scale); abline(v=seq(df$Date[1], df$Date[nrow(df)] , by=365), lty=2)
-  #print(mean(df$pnl) / sd(df$pnl) * sqrt(12))
-  #plot.ts(SMA(df$pnl^2,3))
-  get_returns_statistics(data.frame(df$pnl), period = 12) %>% unlist
+  m_pred <-  fit$draws(variables = "y_hat")  %>% merge_chains %>% colMeans()  %>% unlist(); 
+  S <-  fit$draws(variables = "S")  %>% merge_chains %>% colMeans() %>% sqrt  %>% unlist(); 
+  m_preds <- list(); 
+  Ss <- list()
+  sds <- list()
+  trades <- list()
+  returns1 <- list()
+  returns2 <- list()
+  pnls <- list()
+  for(i in 1:(ncol(y))) {
+    index <- as.character(i)
+    returns1[[i]] <- c(0, diff(log(x1[,i])))
+    returns2[[i]] <- c(0, diff(log(x2[,i])))
+    sds[[i]] <- sqrt(SMA((returns1[[i]] - returns2[[i]])^2, 3))
+    m_preds[[i]] <-  lead(m_pred[ ((i-1)*nrow(y)+1) : (i*nrow(y)) ]) # leading because m_pred[t] is the prediction we make at time t-1
+    Ss[[i]] <-  S[grep(paste0(",", index, ",", index), names(S))] 
+    trades[[i]] <- ifelse(m_preds[[i]] > y[,i], 1, ifelse(m_preds[[i]] < y[,i], -1, 0)) / sds[[i]] / 100
+    pnls[[i]] <- (1./ncol(y)) * lag(trades[[i]]) * (returns1[[i]] - returns2[[i]])
+    pnls[[i]][is.na(pnls[[i]])] <- 0
+  }
+  portfolio <- do.call(cbind, pnls)
+  get_returns_statistics(portfolio, period = 12, plot=TRUE) %>% unlist
 }
 
 
@@ -741,6 +836,7 @@ get_returns_statistics(data.frame(df$pnl), period = 12) %>% unlist
 
 
 # Full series CV
+{
 m_pred <- rep(NA, 100)
 P_pred <- rep(NA, 100)
 for(i in 100:(nrow(Oil)-1)) {
@@ -748,15 +844,15 @@ for(i in 100:(nrow(Oil)-1)) {
   fit <- m3.0$sample(data=list(N=length(y), y=y, m0=y[1], P0=1, month=m, period=12, dft=2, J=ncol(X), X=X, h=h), chains  =1, iter_warmup = 250, iter_sampling = 250)
   m_pred <- c(m_pred, fit$draws(variables = "m_pred")  %>% merge_chains %>% colMeans() %>% t %>% tail(1) %>% as.numeric())
   P_pred <- c(P_pred, fit$draws(variables = "P_pred")  %>% merge_chains %>% colMeans() %>% t %>% tail(1) %>% as.numeric())
-  
+}
 }
 
 
-y <- Oil_extended$HoSpread %>% tail(307)
+# Random stuff
+y <- Oil_extended$GasolineSpread %>% tail(307)
 X0 <- array(0, dim=c(length(y), 0))
-bb <- apply(Oil_extended[,-1] %>% tail(length(y)), 2, function(x) {y <- c(0, diff(x)); y[is.na(y)] <- 0; (y-runMean(y, cumulative = TRUE))/runSD(y, cumulative = TRUE)  }); bb[is.na(bb)] <- 0
-pca2 <- prcomp(bb)
-X2 <- (pca2$x[,1:10])
+bb <- apply(Oil_extended2[,-1] %>% tail(length(y)), 2, function(x) {y <- c(0, diff(x)); y[is.na(y)] <- 0; (y-runMean(y, cumulative = TRUE))/runSD(y, cumulative = TRUE)  }); bb[is.na(bb)] <- 0
+X2 <- tail(bb, 307)
 
 fit_m3.0 <- m3.0$sample(data=list(N=length(y), y=y, m0=y[1], P0=sd(diff(y)), month=1:length(y), period=12, dft=2, 
                               J=ncol(X0), X=X0, h=0, level=1, ma=2,garch=1, sigma1=1, trainset=length(y)),     
@@ -771,6 +867,6 @@ aa <- apply(outlook[,-1] %>% tail(324) %>% head(307), 2, function(x) {y <- c(0, 
 pca <- prcomp(aa)
 X1 <- (pca$x[,1:30])
 
-stanfit <- rstan::read_stan_csv(fit___$output_files());plot(stanfit,pars=names(stanfit)[1:50])
+stanfit <- rstan::read_stan_csv(fit_ouch$output_files());plot(stanfit,pars=names(stanfit)[1:25])
 
 

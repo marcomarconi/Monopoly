@@ -47,7 +47,7 @@ parameters {
   row_vector[ma] theta; 
   vector[dft*2] C;
   vector<lower=0, upper=1>[level==1] ar;
-  vector<lower=0> [level==1]pl;
+  vector [level==1]pl;
   real<lower=0> sigma_x_q0;
   real<lower=0, upper=1> sigma_x_q1;
   real<lower=0, upper=(1-sigma_x_q1)> sigma_x_q2;
@@ -91,14 +91,15 @@ transformed parameters {
                               sigma_x_q1 * (y[t - 1] - y[t - 2])^2 +
                               sigma_x_q2 * (sigma_x[t - 1])^2
                               );
-            m_pred[t] = m[t-1] + theta * (m[(t-ma):(t-1)] - m[(t-ma-1):(t-2)]) + c[t,] * C;
+            m_pred[t] = m[t-1];
             if(level)
-              m_pred[t] = ar[1] * (m_pred[t] + pl[1]);
+              m_pred[t] = ar[1] * m_pred[t] + pl[1];
+            m_pred[t] += theta * (m[(t-ma):(t-1)] - m[(t-ma-1):(t-2)]) + c[t,] * C;   
             P_pred[t] = P[t-1] + sigma_x[t]^2;
         }
         if(t > start && t <= N) {
-          m_pred[t] += Dx[t];
-          v[t] = y[t] - (m_pred[t] + Dy[t]);
+          m_pred[t] += Dx[t-1];
+          v[t] = y[t] - (m_pred[t] + Dy[t-1]);
         }
         S[t] = P_pred[t] + R;
         K = P_pred[t] / S[t];
@@ -114,20 +115,22 @@ model {
   sigma_y ~ exponential(1);
   theta ~ normal(0, 1);
   C ~ normal(0, 1);
-  pl ~ exponential(1);
+  pl ~ cauchy(0, 1);
   ar ~ beta(10, 2);
   sigma_x_q0 ~ exponential(1);
   Bx ~ normal(0, 1);
   By ~ normal(0, 1);
-  y[1:trainset] ~ normal(m_pred[1:trainset] + Dy[1:trainset] , sqrt(S[1:trainset]));
+  y[2:trainset] ~ normal(m_pred[2:trainset] + Dy[1:(trainset-1)] , sqrt(S[2:trainset]));
 }
 
 generated quantities {
   array[N] real log_lik;
   array[N+h] real y_hat;
-  for(i in 1:N+h) {
+  log_lik[1] = normal_lpdf(y[1] | m_pred[1], sqrt(S[1]));
+  y_hat[1] = normal_rng(m_pred[1], sqrt(S[1]));
+  for(i in 2:N+h) {
       if(i <= N)
-        log_lik[i] = normal_lpdf(y[i] | m_pred[i] + Dy[i], sqrt(S[i]));
-      y_hat[i] = normal_rng(m_pred[i] + Dy[i], sqrt(S[i]));
+        log_lik[i] = normal_lpdf(y[i] | m_pred[i] + Dy[i-1], sqrt(S[i]));
+      y_hat[i] = normal_rng(m_pred[i] + Dy[i-1], sqrt(S[i]));
   }  
 }

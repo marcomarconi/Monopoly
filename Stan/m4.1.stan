@@ -1,3 +1,5 @@
+// same as 4.1, but with hieranchical priors
+
 functions{
 matrix cov_GPL2(matrix x, real sq_alpha, real sq_rho, vector delta) {
         int N = dims(x)[1];
@@ -29,16 +31,16 @@ data {
   int ma;   
   // with level
   int level;
-  // Use a kernel for the correlation matrix, must provide a distance matrix for the series
+  // GP
   int gp;
   matrix[D,D] Dmat;
  	// covariates                                                                             
+ 	/*                                                                                        
  	int J;                                                                                    
- 	matrix[N, J] X; 
+ 	matrix[N, J] X;  */    
  	// garch
  	int garch;
-  // Training set
-  int trainset;
+
 }                                                                                           
 transformed data {                                                                          
  	matrix[D, D] I;                                                                           
@@ -59,47 +61,38 @@ parameters {
   vector<lower=0>[D] r0;                                                             
  	array[garch==1] vector<lower=0, upper=1>[D] q1;    
  	array[garch==1] vector<lower=0, upper=1>[D] q2;  
- 	//array[gp==0] corr_matrix[D] q_corr;
- 	array[gp==0] cholesky_factor_corr[D] q_L_corr;   
- 	array[gp==0] cholesky_factor_corr[D] r_L_corr;   
+ 	array[gp==0] corr_matrix[D] q_corr;   
   array[gp==1] real<lower=0> q_alpha;
   array[gp==1] real<lower=0> q_rho;
-  array[gp==1] real<lower=0> r_alpha;
-  array[gp==1] real<lower=0> r_rho;
   matrix[D, ma] theta; 
+  vector[ma] theta_m; 
+  vector<lower=0>[ma] theta_s; 
  	matrix[D, dft*2] C;                                                                       
- 	vector<lower=0, upper=1>[D] ar;                                                           
- 	vector[D] pl;        
- 	matrix[J, D] Bx;
-  matrix[J, D] By;
+ 	vector<lower=0, upper=1>[D] ar;    
+ 	real<lower=0, upper=1> ar_m; 
+  real<lower=0> ar_s; 
+ 	vector[D] pl;                                                                          
 }                                                                                           
-transformed parameters {                             
-  array[N+h] vector[D] mu;                                                                  
+transformed parameters {                                                                  
+	array[N+h] vector[D] m_pred;                                                              
+ 	array[N+h] vector[D] mu;                                                                  
  	array[N+h] matrix[D, D] S;                                                                 
-  array[N+h] vector[D] v;   
-  matrix[D, N] Dx;
-  matrix[D, N] Dy;
+  array[N+h] vector[D] v;                                                                   
 	{                                                                                           
  	  array[N+h] vector[D] m;                                                                   
-  	array[N+h] vector[D] m_pred;                                                              
- 	  array[N+h] matrix[D, D] P_pred;      
- 	  array[N+h] matrix[D, D] P;                                                                
+   	array[N+h] matrix[D, D] P;                                                                
+   	array[N+h] matrix[D, D] P_pred;                                                           
    	array[N+h] matrix[D, D] Q;                                                                
    	matrix[D, D] R;    
    	int start;
  	  array[N+h] matrix[D, D] K;                                                              
- 	  array[N+h] vector[D] xi;   
- 	  
- 	  // Build up the covariates*coefficient matrices for later use
-    Dx = Bx' * X';
-    Dy = By' * X';
+ 	  array[N+h] vector[D] xi;                                                                
+
+ 	  //Q = diag_matrix(q0) * Rho_x * diag_matrix(q0);                      
+ 	  R = diag_matrix(r0) /* Rho_y */* diag_matrix(r0);                         
  	  v = rep_array(rep_vector(0, D), N+h);                                                             
-    if(gp)
-      R = cov_GPL2(Dmat, r_alpha[1], r_rho[1], r0^2);
-    else  
-      R = quad_form_diag(r_L_corr[1] * r_L_corr[1]', r0);    
-      
-    start = max(garch+1, ma+1);
+	                                                                                            
+ 	  start = max(garch+1, ma+1);
     for(t in 1:start) {                                                         
  	    m_pred[t] = m0;                                                                       
  	    P_pred[t] = P0;                                                                       
@@ -114,12 +107,10 @@ transformed parameters {
  	        xi[t] +=    q1[1] .* (y[t-1] - y[t-2])^2                                              
  	                  + q2[1] .* xi[t-1];    
  	      // kernel            
-        if(gp) {
+        if(gp) 
           Q[t] = cov_GPL2(Dmat, q_alpha[1], q_rho[1], xi[t]^2);
-        }
-        else {        
- 	        Q[t] = quad_form_diag(q_L_corr[1] * q_L_corr[1]', xi[t]);
-        }
+        else        
+ 	        Q[t] = quad_form_diag(q_corr[1], xi[t]);  
  	      // variance prediction
  	      P_pred[t] = P[t - 1] + Q[t];        
         // state prediction
@@ -132,12 +123,9 @@ transformed parameters {
  	      if(ma > 0)
  	        for(i in 1:ma)
  	          m_pred[t] += theta[,i] .* (y[t-i] - y[t-i-1]);
+ 	                                          
  	    }                                                                                     
- 	    if(t > start && t <= N) {
- 	        // covariates
-          m_pred[t] += Dx[,t-1];
-          v[t] = y[t] - (m_pred[t] + Dy[,t-1]);
-      }                                                   
+ 	    v[t] = y[t] - m_pred[t];                                                              
  	    S[t] = P_pred[t] + R;                                                                 
  	    K[t] = P_pred[t] / S[t];                                    
  	    m[t] = m_pred[t] + K[t] * v[t];                                                       
@@ -154,38 +142,31 @@ model {
  	if(gp) {
  	  q_alpha[1] ~ exponential(1);
     q_rho[1] ~ exponential(1);
-    r_alpha[1] ~ exponential(1);
-    r_rho[1] ~ exponential(1);
  	}
- 	else {
- 	  q_L_corr[1] ~ lkj_corr_cholesky(D);
- 	  r_L_corr[1] ~ lkj_corr_cholesky(D);
- 	}
+ 	else
+ 	  q_corr[1] ~ lkj_corr(D);                                                                      
 	for(i in 1:D) {
 	  C[i] ~ normal(0, 1);  
-	  theta[i,] ~ normal(0, 1);
-	  Bx[,i] ~ normal(0, 1);
-    By[,i] ~ normal(0, 1);
+	  
 	}
+	for(i in 1:ma)
+	  theta[,i] ~ normal(theta_m[i], theta_s[i]);
+	theta_m ~ normal(0, 1);
+	theta_s ~ exponential(1);
+	ar ~ normal(ar_m, ar_s);
+	ar_m ~ beta(10, 2);    
+	ar_s ~ exponential(5);
 	pl ~ cauchy(0, 1);                                                                     
-	ar ~ beta(10, 2);    
-  for (t in 2 : trainset)                                                                        
-	    y[t] ~ multi_normal(mu[t] + Dy[,t-1], S[t]);                                                       
+	
+  for (t in 3 : N+h)                                                                        
+	    y[t] ~ multi_normal(mu[t], S[t]);                                                       
  }         
  
  generated quantities {                                                                      
 	array[N] real log_lik;                                                                    
-	array[N+h] vector[D] y_hat;      
-	array[gp==0] corr_matrix[D] q_corr;
-	array[gp==0] corr_matrix[D] r_corr;
-	if(gp==0) {
-    q_corr[1] = multiply_lower_tri_self_transpose(q_L_corr[1]);
-	  r_corr[1] = multiply_lower_tri_self_transpose(r_L_corr[1]);
-	}
-	log_lik[1] = multi_normal_lpdf(y[1] | mu[1], S[1]);                                   
-  y_hat[1] = multi_normal_rng(mu[1], S[1]);     
-	for (t in 2 : N)                                                                          
-	    log_lik[t] = multi_normal_lpdf(y[t] | mu[t] + Dy[,t-1], S[t]);                                   
-	for (t in 2 : N+h)                                                                        
-	    y_hat[t] = multi_normal_rng(mu[t] + Dy[,t-1], S[t]);                                             
+	array[N+h] vector[D] y_hat;                                                               
+	for (i in 1 : N)                                                                          
+	    log_lik[i] = multi_normal_lpdf(y[i] | mu[i], S[i]);                                   
+	for (i in 1 : N+h)                                                                        
+	    y_hat[i] = multi_normal_rng(mu[i], S[i]);                                             
  }                                                                                           
