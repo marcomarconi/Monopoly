@@ -44,7 +44,7 @@ parameters {
   real m1;
   real<lower=0>  P1;
   real<lower=0> sigma_y;
-  row_vector[ma] theta; 
+  row_vector<lower=-1, upper=1>[ma] theta; 
   vector[dft*2] C;
   vector<lower=0, upper=1>[level==1] ar;
   vector [level==1]pl;
@@ -56,16 +56,15 @@ parameters {
 }
 transformed parameters {
   vector[N+h] m_pred; 
-  vector[N+h] m; 
-  vector[N+h] P_pred; 
-  vector[N+h] sigma_x;
-  vector[N+h] P; 
   vector[N+h] S; 
   vector[N+h] v; 
   vector[N] Dx;
   vector[N] Dy;
   {
-    int start;
+    vector[N+h] m; 
+    vector[N+h] P_pred; 
+    vector[N+h] sigma_x;
+    vector[N+h] P; int start;
     real R; 
     real K;  
     
@@ -94,7 +93,7 @@ transformed parameters {
             m_pred[t] = m[t-1];
             if(level)
               m_pred[t] = ar[1] * m_pred[t] + pl[1];
-            m_pred[t] += theta * (m[(t-ma):(t-1)] - m[(t-ma-1):(t-2)]) + c[t,] * C;   
+            m_pred[t] +=  c[t,] * C;   
             P_pred[t] = P[t-1] + sigma_x[t]^2;
         }
         if(t > start && t <= N) {

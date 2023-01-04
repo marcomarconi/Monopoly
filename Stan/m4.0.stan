@@ -68,8 +68,8 @@ parameters {
   array[gp==1] real<lower=0> r_rho;
   matrix[D, ma] theta; 
  	matrix[D, dft*2] C;                                                                       
- 	vector<lower=0, upper=1>[D] ar;                                                           
- 	vector[D] pl;        
+ 	array[level==1]vector<lower=0, upper=1>[D] ar;                                                           
+ 	array[level==1]vector[D] pl;        
  	matrix[J, D] Bx;
   matrix[J, D] By;
 }                                                                                           
@@ -125,13 +125,13 @@ transformed parameters {
         // state prediction
         m_pred[t] = m[t - 1];
  	      if(level)
- 	        m_pred[t] = ar .* m_pred[t] + pl;   
+ 	        m_pred[t] = ar[1] .* m_pred[t] + pl[1];   
  	      // seasonality
  	      m_pred[t] += C * c[,t];      
  	      // MA
  	      if(ma > 0)
  	        for(i in 1:ma)
- 	          m_pred[t] += theta[,i] .* (y[t-i] - y[t-i-1]);
+ 	          m_pred[t] += theta[,i] .* (m[t-i] - m[t-i-1]);
  	    }                                                                                     
  	    if(t > start && t <= N) {
  	        // covariates
@@ -167,8 +167,10 @@ model {
 	  Bx[,i] ~ normal(0, 1);
     By[,i] ~ normal(0, 1);
 	}
-	pl ~ cauchy(0, 1);                                                                     
-	ar ~ beta(10, 2);    
+	if(level) {
+	  pl[1] ~ cauchy(0, 1);                                                                     
+	  ar[1] ~ beta(10, 2);
+	}
   for (t in 2 : trainset)                                                                        
 	    y[t] ~ multi_normal(mu[t] + Dy[,t-1], S[t]);                                                       
  }         

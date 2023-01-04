@@ -1,6 +1,6 @@
 // Bivariate SSM with seasonal and variable trend (LLT style)
 
-TO BE REMOVED
+//TO BE REMOVED
 
 data {
   int<lower=0> N;
