@@ -1,4 +1,4 @@
-// Bivariate SSM with time-varying trend (LLT style) and GARCH
+// Bivariate SSM with time-varying level (LLT style) and GARCH
 
 data {
   int<lower=0> N;
@@ -61,7 +61,7 @@ transformed parameters {
     array[N+h] vector[D] K;
     v = rep_vector(0, N+h);
     
-    Z = [[1, 1],
+    Z = [[ar, 1-ar],
          [0, 1]];  
     H = [1, 0];    
     Ht = H';
@@ -80,8 +80,8 @@ transformed parameters {
         sigma_proc_1[t] = sqrt(q0 +
                               q1 * pow(y[t - 1] - y[t - 2], 2) +
                               q2 * pow(sigma_proc_1[t - 1], 2));
-        Q = diag_matrix([ sigma_proc_1[t]^2, sigma_proc_2^2]');                      
-        m_pred[t] = Z * m[t - 1] + [c[t,] * C, Dl[t]]';
+        Q = diag_matrix([sigma_proc_1[t]^2, sigma_proc_2^2]');                      
+        m_pred[t] = Z * m[t - 1] + [c[t,] * C, Dl[t-1]]';
         P_pred[t] = Z * P[t - 1] * Z' + Q;
       }
       v[t] = y[t] - H * m_pred[t];

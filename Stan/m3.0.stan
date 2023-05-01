@@ -1,4 +1,5 @@
 // The final crack model
+// you might want to remove the level
 
 data {
   int<lower=0> N;
@@ -12,8 +13,12 @@ data {
   int period;
   int dft;
   // covariates
-  int J;
-  matrix[N, J] X;
+  int Jx;
+  matrix[N, Jx] Xx;
+  int Jy;
+  matrix[N, Jy] Xy;
+  int Jl;
+  matrix[N, Jl] Xl;
   // moving average
   int ma;
   // with level
@@ -44,15 +49,16 @@ parameters {
   real m1;
   real<lower=0>  P1;
   real<lower=0> sigma_y;
-  row_vector<lower=-1, upper=1>[ma] theta; 
+  vector<lower=-1, upper=1>[ma==1] theta; 
   vector[dft*2] C;
   vector<lower=0, upper=1>[level==1] ar;
-  vector [level==1]pl;
+  vector [level==1]pl_a;
   real<lower=0> sigma_x_q0;
-  real<lower=0, upper=1> sigma_x_q1;
-  real<lower=0, upper=(1-sigma_x_q1)> sigma_x_q2;
-  vector[J] Bx;
-  vector[J] By;
+  vector<lower=0, upper=1>[garch==1] sigma_x_q1;
+  vector<lower=0, upper=(1-sigma_x_q1)>[garch==1] sigma_x_q2;
+  vector[Jx] Bx;
+  vector[Jy] By;
+  vector[Jl] Bl;
 }
 transformed parameters {
   vector[N+h] m_pred; 
@@ -60,6 +66,7 @@ transformed parameters {
   vector[N+h] v; 
   vector[N] Dx;
   vector[N] Dy;
+  vector[N] Dl;
   {
     vector[N+h] m; 
     vector[N+h] P_pred; 
@@ -68,8 +75,9 @@ transformed parameters {
     real R; 
     real K;  
     
-    Dx = X * Bx;
-    Dy = X * By;
+    Dx = Xx * Bx;
+    Dy = Xy * By;
+    Dl = Xl * Bl;
     
     v = rep_vector(0, N+h);
     R = sigma_y^2;
@@ -83,22 +91,24 @@ transformed parameters {
     for (t in 1:N+h) {
         if (t > start) {
             if(!garch)
-              sigma_x[t] = sqrt(sigma_x_q0);
+              sigma_x[t] = sigma_x_q0;
             else               
               sigma_x[t] = sqrt(
                               sigma_x_q0 +
-                              sigma_x_q1 * (y[t - 1] - y[t - 2])^2 +
-                              sigma_x_q2 * (sigma_x[t - 1])^2
+                              sigma_x_q1[1] * (y[t - 1] - y[t - 2])^2 +
+                              sigma_x_q2[1] * (sigma_x[t - 1])^2
                               );
             m_pred[t] = m[t-1];
-            if(level)
-              m_pred[t] = ar[1] * m_pred[t] + pl[1];
+            if(level) {
+              real pl = pl_a[1] + Dl[t-1];
+              m_pred[t] = ar[1] * m_pred[t] + pl;
+            }
             m_pred[t] +=  c[t,] * C;   
             P_pred[t] = P[t-1] + sigma_x[t]^2;
         }
         if(t > start && t <= N) {
           m_pred[t] += Dx[t-1];
-          v[t] = y[t] - (m_pred[t] + Dy[t-1]);
+          v[t] = y[t] - (m_pred[t] + Dy[t-1] + (ma > 0 ? theta[1] * v[t-1] : 0));
         }
         S[t] = P_pred[t] + R;
         K = P_pred[t] / S[t];
@@ -114,12 +124,13 @@ model {
   sigma_y ~ exponential(1);
   theta ~ normal(0, 1);
   C ~ normal(0, 1);
-  pl ~ cauchy(0, 1);
+  pl_a ~ cauchy(0, 1);
   ar ~ beta(10, 2);
   sigma_x_q0 ~ exponential(1);
   Bx ~ normal(0, 1);
   By ~ normal(0, 1);
-  y[2:trainset] ~ normal(m_pred[2:trainset] + Dy[1:(trainset-1)] , sqrt(S[2:trainset]));
+  Bl ~ normal(0, 1);
+  y[2:trainset] ~ normal(m_pred[2:trainset] + Dy[1:(trainset-1)] + (ma > 0 ? theta[1] * v[1:(trainset-1)] : rep_vector(0, (trainset-1))), sqrt(S[2:trainset]));
 }
 
 generated quantities {
@@ -129,7 +140,7 @@ generated quantities {
   y_hat[1] = normal_rng(m_pred[1], sqrt(S[1]));
   for(i in 2:N+h) {
       if(i <= N)
-        log_lik[i] = normal_lpdf(y[i] | m_pred[i] + Dy[i-1], sqrt(S[i]));
-      y_hat[i] = normal_rng(m_pred[i] + Dy[i-1], sqrt(S[i]));
+        log_lik[i] = normal_lpdf(y[i] | m_pred[i] + Dy[i-1] + (ma > 0 ? theta[1] * v[i-1] : 0), sqrt(S[i]));
+      y_hat[i] = normal_rng(m_pred[i] + Dy[i-1] + (ma > 0 ? theta[1] * v[i-1] : 0), sqrt(S[i]));
   }  
 }
