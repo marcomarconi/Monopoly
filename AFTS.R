@@ -5,6 +5,7 @@ library(TTR)
   library(lubridate)
   library(tsibble)
   library(zoo)
+  library(moments)
 }
 
 
@@ -18,12 +19,12 @@ strategy_performance <- function(returns, dates=NULL, period=252) {
   if(is.null(dates)) 
     dates <- seq(as.Date("1970/01/01"), by = "day", length.out = length(returns))
   df <- data.frame(Dates=dates, Returns=returns) %>% arrange(Dates)
-  annual_returns <- group_by(df, year(Dates)) %>% summarise(Dates=first(year(Dates)), Returns = sum(Returns, na.rm=TRUE)) 
-  monthly_returns <- group_by(df, yearmonth(Dates)) %>% summarise(Dates=first(yearmonth(Dates)), Returns = sum(Returns, na.rm=TRUE)) 
-  mean_ann_ret <- mean(annual_returns$Returns, na.rm=TRUE) * 100
+  annual_returns <- group_by(df, year(Dates)) %>% summarise(Dates=first(year(Dates)), Returns = sum(Returns, na.rm=TRUE)) %>% pull(Returns)
+  monthly_returns <- group_by(df, yearmonth(Dates)) %>% summarise(Dates=first(yearmonth(Dates)), Returns = sum(Returns, na.rm=TRUE)) %>% pull(Returns)
+  mean_ann_ret <- mean(annual_returns, na.rm=TRUE) * 100
   ann_sd <- sd(df$Returns, na.rm=TRUE) * sqrt(period) * 100
   sr <- mean(df$Returns, na.rm=TRUE) / sd(df$Returns, na.rm=TRUE) * sqrt(period)
-  skew <- skewness(monthly_returns$Returns, na.rm=TRUE)
+  skew <- skewness(monthly_returns, na.rm=TRUE)
   q <- quantile(df$Returns[df$Returns!=0], probs=c(0.01, 0.3, 0.7, 0.99), na.rm=TRUE)
   lower_tail <- as.numeric(q[1] / q[2] / 4.43)
   upper_tail <- as.numeric(q[4] / q[3] / 4.43)
@@ -33,7 +34,9 @@ strategy_performance <- function(returns, dates=NULL, period=252) {
   max_drawdown <- -(exp(drawdown[which.max(drawdown)])-1)*100
   avg_drawdown <- -(exp(mean(drawdown))-1)*100
   gpr <-  sum(df$Returns, na.rm=TRUE) / sum(abs(df$Returns[df$Returns<0]), na.rm=TRUE)
-  r2 <- summary(lm(1:length(cum_returns) ~ 0+cum_returns))$adj.r.squared
+  cum_annual_returns = cumsum(replace(annual_returns, is.na(annual_returns), 0)) 
+  r2 <- summary(lm(1:length(cum_annual_returns) ~ 0+cum_annual_returns))$adj.r.squared
+  #turnover <- round(length(rle(as.vector(na.omit(sign(returns))))$length) / period, 1)
   results <- list("Mean annual return"=mean_ann_ret, 
                   "Annualized standard deviation"=ann_sd, 
                   "Sharpe ratio"=sr, 
@@ -44,7 +47,7 @@ strategy_performance <- function(returns, dates=NULL, period=252) {
                   "Average drawdown"=avg_drawdown,
                   "GPR"=gpr,
                   "R2"=r2
-  )
+                  )
   return(lapply(results, round, 2))
 }
 
@@ -88,7 +91,7 @@ portfolio_summary <- function(portfolio, dates=NULL, period=252, benchmark.dates
   }
   symbol_result <- NULL
   if(symbol_wise) {
-    symbol_result <- apply(portfolio, 2, function(x) strategy_performance(x, dates = dates)) %>% do.call(cbind,.) %>% t
+    symbol_result <- apply(portfolio, 2, function(x) unlist(strategy_performance(x, dates = dates))) %>% t
   }
 
   return(list(Aggregate=results, Symbols=symbol_result))
@@ -102,7 +105,8 @@ merge_portfolio_list <- function(portfolio_list) {
   return(full_df)
 }
 
-calculate_risk <- function(returns, long_span=252, short_span=35,  weights=c(0.3, 0.7), period=252){
+# in percentages
+calculate_volatility <- function(returns, long_span=252, short_span=35,  weights=c(0.3, 0.7), period=252){
   vol_short <- sqrt(EMA(replace(returns, is.na(returns), 0)^2, short_span))
   vol_long <- runMean(vol_short, long_span)
   vol <-  (weights[1] * vol_long + weights[2] * vol_short) * sqrt(period) # one year instead of ten
@@ -152,7 +156,7 @@ with(SP500, plot(Date,cumsum(Excess)))
 strategy_performance(SP500$Excess,SP500$Date) %>% unlist
 }
 
-## Stategy 4
+## Stategy 4 (benchmark)
 {
 # Risk parity
 {
@@ -206,7 +210,7 @@ jumbo <- list()
 IDM = 2.47
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Position = lag(target_vol / calculate_risk(df$Return))
+  df$Position = lag(target_vol / calculate_volatility(df$Return))
   df$Excess <- df$Return * df$Position * IDM
   jumbo[[n]] <- select(df, Date, Excess)
 }
@@ -218,6 +222,7 @@ benchmark.returns <- portfolio[,-1] %>% rowMeans()
 }
 }
 ## Stategy 5
+{
 # SP only
 {
 SP500 <- backadjust_future(Futures[["ES"]], N = 5)
@@ -238,7 +243,7 @@ jumbo <- list()
 IDM = 2.47
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Position = lag(target_vol / calculate_risk(df$Return))
+  df$Position = lag(target_vol / calculate_volatility(df$Return))
   df$Trend <- EMA(df$Backadjusted, 64) -  EMA(df$Backadjusted, 256)
   df$Trade <- lag(ifelse(df$Trend > 0, 1, 0))
   df$Excess <- df$Return * df$Position * df$Trade * IDM
@@ -248,6 +253,7 @@ portfolio <- merge_portfolio_list(jumbo)
 res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = TRUE) 
 print(res$Aggregate %>% unlist)
 }
+}
 ## Stategy 6
 # Jumbo
 {
@@ -255,7 +261,7 @@ jumbo <- list()
 IDM = 1#2.41
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Position = lag(target_vol / calculate_risk(df$Return))
+  df$Position = lag(target_vol / calculate_volatility(df$Return))
   df$Trend <- EMA(df$Backadjusted, 64) -  EMA(df$Backadjusted, 256)
   #df$Trend <- AbsoluteStrength(df$Backadjusted, 250)
   df$Trade <- lag(ifelse(df$Trend > 0, 1, -1))
@@ -274,7 +280,7 @@ jumbo <- list()
 IDM = 1 #2.41
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Risk = calculate_risk(df$Return)
+  df$Risk = calculate_volatility(df$Return)
   df$Position = lag(target_vol / df$Risk)
   df$Trend <- EMA(df$Backadjusted, 64) -  EMA(df$Backadjusted, 256)
   df$Forecast <- df$Trend / (df$Nearest * df$Risk / 16) * 1.9
@@ -295,7 +301,7 @@ jumbo <- list()
 IDM = 1
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Risk = calculate_risk(df$Return)
+  df$Risk = calculate_volatility(df$Return)
   df$Position = lag(target_vol / df$Risk)
   df$Trend <- EMA(df$Backadjusted, 16) -  EMA(df$Backadjusted, 64)
   df$Forecast <- df$Trend / (df$Nearest * df$Risk / 16) * 1.9
@@ -386,7 +392,7 @@ return(df)
   FDM <- 1.39
   for(n in names(Symbols)) {
     df <- Symbols[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Risk)
     df <- multiple_ema(df)
     #df <- multiple_as(df)
@@ -434,7 +440,7 @@ FDM <- 1.04
 tt <- list()
 for(n in names(BackAdj)) {
   df <- BackAdj[[n]]
-  df$Risk = calculate_risk(df$Return)
+  df$Risk = calculate_volatility(df$Return)
   df$Position = lag(target_vol / df$Risk)
   df <- multiple_carry(df, scalar=30)
   df$Trade <- df$Trade * FDM
@@ -456,7 +462,7 @@ print(res$Aggregate %>% unlist)
   tt <- list()
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Risk)
     df <- multiple_ema(df)
     df$ForecastTrend <- df$Trade
@@ -486,7 +492,7 @@ print(res$Aggregate %>% unlist)
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
     df$Return[is.na(df$Return)] <- 0
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Trend <- EMA(df$Backadjusted, f) -  EMA(df$Backadjusted, f*4)
     df$Forecast <- df$Trend / (df$Nearest * df$Risk / 16) * scalar
     #df$Forecast <- ifelse(df$Forecast > 20, 20, ifelse(df$Forecast < -20, -20, df$Forecast )) 
@@ -506,14 +512,14 @@ print(res$Aggregate %>% unlist)
 {
   # Figure 54
   df <- BackAdj[["ES"]]
-  df$Risk = calculate_risk(df$Return)
+  df$Risk = calculate_volatility(df$Return)
   df$RV <- df$Risk / runMean(df$Risk, 256)
   plot(df$Date, df$RV)
   # Figure 55
   RVs <- list()
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     RVs[[n]] <- df$Risk / runMean(df$Risk, 256)
   }
   RVs %>% unlist %>% hist(xlim = c(0,5), 100)
@@ -524,7 +530,7 @@ print(res$Aggregate %>% unlist)
     tt <- list()
     for(n in names(BackAdj)) {
       df <- BackAdj[[n]]
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$RV <- df$Risk / runMean(df$Risk, 256)
       Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
       M <- EMA(2-1.5*Q)
@@ -576,7 +582,7 @@ print(res$Aggregate %>% unlist)
 {
   # Figure 69
   df <- BackAdj[["ES"]]
-  df$Risk = calculate_risk(df$Difference)
+  df$Risk = calculate_volatility(df$Difference)
   df$NP <- 0
   for(i in 2:nrow(df)) {
     df$NP[i] <-  (100 * (df$Backadjusted[i] - df$Backadjusted[i-1]) / (df$Risk[i] )) + df$NP[i-1]
@@ -591,7 +597,7 @@ print(res$Aggregate %>% unlist)
     FDM <- 1.26
     for(n in names(BackAdj)) {
       df <- BackAdj[[n]]
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Risk)
       df$NP <- 0
       for(i in 2:nrow(df)) {
@@ -621,7 +627,7 @@ print(res$Aggregate %>% unlist)
     NPs <- list()
     for(n in names(BackAdj)) {
       df <- BackAdj[[n]]
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$NP <- 0
       for(i in 2:nrow(df)) {
         df$NP[i] <-  (100 * (df$Backadjusted[i] - df$Backadjusted[i-1]) / (df$Risk[i] * df$Nearest[i] / 16)) + df$NP[i-1]
@@ -642,7 +648,7 @@ print(res$Aggregate %>% unlist)
     FDM <- 1.39
     for(n in names(BackAdj)) {
       df <- BackAdj[[n]]
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Risk)
       df <- merge(df, filter(R, Class==df$Class[1]) %>%  select(Date, A), by="Date") # R obtained from before
       df$Backadjusted  <- df$A
@@ -663,7 +669,7 @@ print(res$Aggregate %>% unlist)
 {
   # Figure 72
   df <- BackAdj[["ES"]]
-  df$Risk = calculate_risk(df$Return)
+  df$Risk = calculate_volatility(df$Return)
   df$NP <- 0
   for(i in 2:nrow(df)) {
     df$NP[i] <-  (100 * (df$Backadjusted[i] - df$Backadjusted[i-1]) / (df$Risk[i] * df$Nearest[i] / 16)) + df$NP[i-1]
@@ -680,7 +686,7 @@ print(res$Aggregate %>% unlist)
     FDM <- 1.49
     for(n in names(BackAdj)) {
       df <- BackAdj[[n]]
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Risk)
       df$NP <- 0
       for(i in 2:nrow(df)) {
@@ -695,7 +701,7 @@ print(res$Aggregate %>% unlist)
       df$O3 <- EMA(c(rep(NA, 20), diff(df$R, lag=20) / 20), 5) * 108.5
       df$O4 <- EMA(c(rep(NA, 40), diff(df$R, lag=40) / 40), 10) * 153.5
       df$O5 <- EMA(c(rep(NA, 160), diff(df$R, lag=160) / 160), 40) * 296.8
-      df$Trade <- lag(rowMeans(cbind(df$O1, df$O2, df$O3, df$O4, df$O5)))
+      df$Trade <- rowMeans(cbind(df$O1, df$O2, df$O3, df$O4, df$O5))
       df$Trade <- df$Trade * FDM
       df$Trade <- lag(ifelse(df$Trade > 20, 20, ifelse(df$Trade < -20, -20, df$Trade )) / 10)
       df$Excess <- df$Return * df$Position * df$Trade * IDM 
@@ -727,7 +733,7 @@ breakout <- function(p, h=1, scalar=1) {
   FDM <- 1.33
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Risk)
     df$Backadjusted <- na.locf(df$Backadjusted, na.rm = FALSE)
     b1 <- breakout(df$Backadjusted, 10, 0.60)
@@ -758,7 +764,7 @@ breakout <- function(p, h=1, scalar=1) {
       df <- BackAdj[[n]]
       if(sum(!is.na(df$Return)) < 256*10)
         next
-      df$Risk = calculate_risk(df$Return)
+      df$Risk = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Risk)
       df$NP <- 0
       for(i in 2:nrow(df)) {
@@ -789,7 +795,7 @@ breakout <- function(p, h=1, scalar=1) {
   FDM <- 1.39
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Risk)
     df$Forecast8 <- (EMA(df$Backadjusted, 8) -  EMA(df$Backadjusted, 32) ) / (df$Nearest * df$Risk / 16) * 5.95
     df$Forecast16 <- (EMA(df$Backadjusted, 16) -  EMA(df$Backadjusted, 64)) / (df$Nearest * df$Risk / 16) * 2.79
@@ -819,7 +825,7 @@ breakout <- function(p, h=1, scalar=1) {
   FDM <- 1.18
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
-    df$Risk = calculate_risk(df$Return)
+    df$Risk = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Risk)
     skew1 <- c(rep(NA, 60),sapply((60+1):length(df$Return), function(i) -skewness(df$Return[(i-60-1):i], na.rm = TRUE)))
     skew2 <- c(rep(NA, 120),sapply((120+1):length(df$Return), function(i) -skewness(df$Return[(i-120-1):i], na.rm = TRUE)))
@@ -837,4 +843,126 @@ breakout <- function(p, h=1, scalar=1) {
   res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE, benchmark.dates = benchmark.dates, benchmark.returns = benchmark.returns) 
   print(res$Aggregate %>% unlist)
 }
+
+### Production strategy
+
+# The backbone will be strategy 11
+{
+  adjclose <- df$AdjClose; close <- df$Close; risk <- df$Risk; basis <- df$Basis; expiry_difference <- df$Basis_distance
+  cap_forecast <- function(x, cap=20) {
+    return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
+  }
+  multiple_EMA <- function(adjclose, close, risk, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
+    n <- length(spans)
+    EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
+    EWMACs <- lapply(1:n, function(i) EWMACs[[i]] / (close * risk / sqrt(period)) * scalars[i] )
+    EWMACs <- lapply(1:n, function(i) ifelse(EWMACs[[i]] > cap, cap, ifelse(EWMACs[[i]] < -cap, -cap, EWMACs[[i]] ) ))
+    forecast <- rowMeans(do.call(cbind, EWMACs))
+    return(forecast)
+  }
+  multiple_AS <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504), scalars=c(28.53, 49.09, 68.99, 97.00, 136.61), cap=20, period=252) {
+    n <- length(spans)
+    ASs <- lapply(1:n, function(i) AbsoluteStrength(adjclose, spans[i]))
+    ASs <- lapply(1:n, function(i) ASs[[i]] / (close * risk / sqrt(period)) * scalars[i] )
+    ASs <- lapply(1:n, function(i) ifelse(ASs[[i]] > cap, cap, ifelse(ASs[[i]] < -cap, -cap, ASs[[i]] ) ))
+    forecast <- rowMeans(do.call(cbind, ASs))
+    return(forecast)
+  }
+  multiple_DC <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504), scalars=c(31.2, 33.4, 34.3, 34.9, 35.3), cap=20, period=252) {
+    n <- length(spans)
+    DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
+    DCs <- lapply(1:n, function(i) DCs[[i]] * scalars[i] )
+    DCs <- lapply(1:n, function(i) ifelse(DCs[[i]] > cap, cap, ifelse(DCs[[i]] < -cap, -cap, DCs[[i]] ) ))
+    forecast <- rowMeans(do.call(cbind, DCs))
+    return(forecast)
+  }
+  multiple_KF <- function(adjclose, close, risk, spans=c(0.5, 1, 2, 5, 10), scalars=c(66, 55, 46, 37, 31), cap=20, period=252) {
+    n <- length(spans)
+    KFs <- lapply(1:n, function(i) KalmanFilterIndicator(adjclose, sharpness = 1, K = spans[i])[,2])
+    KFs <- lapply(1:n, function(i) KFs[[i]] / ((close * risk / sqrt(period))) * scalars[i] )
+    KFs <- lapply(1:n, function(i) ifelse(KFs[[i]] > cap, cap, ifelse(KFs[[i]] < -cap, -cap, KFs[[i]] ) ))
+    forecast <- rowMeans(do.call(cbind, KFs))
+    return(forecast)
+  }
+  
+  multiple_TII <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504)) {
+    n <- length(spans)
+    TII <- lapply(1:n, function(i) TII(adjclose, P = spans[i]) / 5)
+    forecast <- rowMeans(do.call(cbind, TII))
+    return(forecast)
+  }
+  # basis and risk are in percentage
+  multiple_Carry <- function(basis, expiry_difference, risk, spans=c(21, 63, 126), scalar=30, expiry_span=12) {
+    n <- length(spans)
+    Carry <- (basis / (expiry_difference / expiry_span)) / ( risk )
+    Carry <- na.locf(Carry, na.rm=FALSE); Carry[is.na(Carry)] <- 0
+    EMAs <- lapply(1:n, function(i) EMA(Carry, spans[i]) * scalar)
+    EMAs <- lapply(1:n, function(i) ifelse(EMAs[[i]] > cap, cap, ifelse(EMAs[[i]] < -cap, -cap, EMAs[[i]] ) ))
+    forecast <- rowMeans(do.call(cbind, EMAs))
+    return(forecast)
+  }
+  relative_volatility <- function(volatility, period=2520) {
+    return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
+  }
+  
+  
+  # Execution
+  {
+    Assets <- BackAdj
+    results <- list()
+    target_vol <- 0.25
+    IDM = 2.5
+    FDMtrend <- 1.33
+    FDMcarry <- 1.05
+    weights <- c(1, 0)
+    for(symbol in names(Assets)) {
+      print(symbol)
+      df <- Assets[[symbol]]
+      df$Volatility = calculate_volatility(df$Return)
+      df$Position = lag(target_vol / df$Volatility)
+      # Relative volatility
+      df$M <- 1
+      #df$RV <- relative_volatility(df$Volatility) # quite slow, you can replace it with df$Volatility / runMean(df$Volatility, 2520))  
+      # df$RV <- df$Volatility / runMean(df$Volatility, 252)  
+      # df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
+      # df$M <- EMA(2 - 1.5 * df$Q, 10)
+      # Trend-following
+      #df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
+      df$ForecastAS <- multiple_AS(df$AdjClose, df$Close, df$Volatility) 
+      df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
+      #df$ForecastRSI <- multiple_RSI(df$AdjClose, df$Close, df$Volatility) 
+      df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
+      df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
+      df$ForecastTrend <- rowMeans(cbind(df$ForecastAS, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M
+      df$ForecastTrend <- cap_forecast(df$ForecastTrend)
+      # Carry
+      df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry
+      df$ForecastCarry <- cap_forecast(df$ForecastCarry)
+      # Final trade
+      df$Trade <- (weights[1] * df$ForecastTrend + weights[2] * df$ForecastCarry) / 10 
+      df$Trade <- lag(df$Trade)
+      df$Excess <- df$Return * df$Position * df$Trade * IDM 
+      results[[symbol]] <- select(df, Date, Excess)
+    }
+    portfolio <- merge_portfolio_list(results)
+    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE, benchmark.dates = benchmark.dates  , benchmark.returns = benchmark.returns  ) 
+    print(res$Aggregate %>% unlist)
+  }
+  # > cor(cbind(ema, as, dc, rsi, tii, carry), use="pairwise.complete.obs")
+  #               ema          as        dc        rsi         kf       tii       carry
+  # ema    1.00000000  0.98087784 0.9569068  0.9774590 0.77753903 0.7802132 -0.06468951
+  # as     0.98087784  1.00000000 0.9815585  0.9973434 0.74095885 0.8442622 -0.02987404
+  # dc     0.95690678  0.98155851 1.0000000  0.9819828 0.81395836 0.7945836  0.25337216
+  # rsi    0.97745899  0.99734341 0.9819828  1.0000000 0.73057155 0.8526681 -0.01424110
+  # kf     0.77753903  0.74095885 0.8139584  0.7305715 1.00000000 0.4338501  0.08733133
+  # tii    0.78021325  0.84426222 0.7945836  0.8526681 0.43385009 1.0000000  0.35867119
+  # carry -0.06468951 -0.02987404 0.2533722 -0.0142411 0.08733133 0.3586712  1.00000000
+  # 
+  # Best SR: DC
+  # Best skew: KF
+  # Best Tails: TII
+  # Best correlation: KF
+  # Best GPR: DC
+}
+
 

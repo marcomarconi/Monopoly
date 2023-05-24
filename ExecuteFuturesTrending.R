@@ -10,6 +10,8 @@
   source("/home/marco/trading/Systems/Common/Common.R")
 }
 
+# Note of warning: this script uses yesterday's signal
+
 writeLog <- function(s, log_dir = NULL, d = today(), print_date = TRUE) {
   if(is.null(dir))
     stop("Specify a log directory")
