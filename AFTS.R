@@ -7,120 +7,124 @@ library(TTR)
   library(zoo)
   library(moments)
   library(ggthemes)
+  source("/home/marco/trading/Systems/Common/Indicators.R")
+  
 }
 
 
-strategy_performance <- function(returns, dates=NULL, period=252) {
+Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
+target_vol <- 0.2
+
+strategy_performance <- function(returns, dates = NULL, period = 252) {
   # if(any(is.na(returns)))
-  #   stop("strategy_performance: NAs are not allowed, replace them with zeros") 
-  if(!is.null(dates) & class(dates) != "Date")
+  #   stop("strategy_performance: NAs are not allowed, replace them with zeros")
+  if (!is.null(dates) & class(dates) != "Date") {
     stop(paste("strategy_performance: dates should be of class Date"))
-  if(class(returns) != "numeric")
+  }
+  if (class(returns) != "numeric") {
     stop(paste("strategy_performance: returns should be of class numeric"))
-  if(is.null(dates)) 
+  }
+  if (is.null(dates)) {
     dates <- seq(as.Date("1970/01/01"), by = "day", length.out = length(returns))
-  df <- data.frame(Dates=dates, Returns=returns) %>% arrange(Dates)
-  annual_returns <- group_by(df, year(Dates)) %>% summarise(Dates=first(year(Dates)), Returns = sum(Returns, na.rm=TRUE)) %>% pull(Returns)
-  monthly_returns <- group_by(df, yearmonth(Dates)) %>% summarise(Dates=first(yearmonth(Dates)), Returns = sum(Returns, na.rm=TRUE)) %>% pull(Returns)
-  mean_ann_ret <- mean(annual_returns, na.rm=TRUE) * 100
-  ann_sd <- sd(df$Returns, na.rm=TRUE) * sqrt(period) * 100
-  sr <- mean(df$Returns, na.rm=TRUE) / sd(df$Returns, na.rm=TRUE) * sqrt(period)
-  skew <- skewness(monthly_returns, na.rm=TRUE)
-  q <- quantile(df$Returns[df$Returns!=0], probs=c(0.01, 0.3, 0.7, 0.99), na.rm=TRUE)
+  }
+  df <- data.frame(Dates = dates, Returns = returns) %>% arrange(Dates)
+  annual_returns <- group_by(df, year(Dates)) %>%
+    summarise(Dates = first(year(Dates)), Returns = sum(Returns, na.rm = TRUE)) %>%
+    pull(Returns)
+  monthly_returns <- group_by(df, yearmonth(Dates)) %>%
+    summarise(Dates = first(yearmonth(Dates)), Returns = sum(Returns, na.rm = TRUE)) %>%
+    pull(Returns)
+  mean_ann_ret <- mean(annual_returns, na.rm = TRUE) * 100
+  ann_sd <- sd(df$Returns, na.rm = TRUE) * sqrt(period) * 100
+  sr <- mean(df$Returns, na.rm = TRUE) / sd(df$Returns, na.rm = TRUE) * sqrt(period)
+  skew <- skewness(monthly_returns, na.rm = TRUE)
+  q <- quantile(df$Returns[df$Returns != 0], probs = c(0.01, 0.3, 0.7, 0.99), na.rm = TRUE)
   lower_tail <- as.numeric(q[1] / q[2] / 4.43)
   upper_tail <- as.numeric(q[4] / q[3] / 4.43)
-  cum_returns = cumsum(replace(df$Returns, is.na(df$Returns), 0)) 
-  peak = cummax(cum_returns)
-  drawdown = peak - cum_returns
-  max_drawdown <- -(exp(drawdown[which.max(drawdown)])-1)*100
-  avg_drawdown <- -(exp(mean(drawdown))-1)*100
-  gpr <-  sum(df$Returns, na.rm=TRUE) / sum(abs(df$Returns[df$Returns<0]), na.rm=TRUE)
-  cum_annual_returns = cumsum(replace(annual_returns, is.na(annual_returns), 0)) 
-  r2 <- summary(lm(1:length(cum_annual_returns) ~ 0+cum_annual_returns))$adj.r.squared
-  #turnover <- round(length(rle(as.vector(na.omit(sign(returns))))$length) / period, 1)
-  results <- list("Mean annual return"=mean_ann_ret, 
-                  "Annualized standard deviation"=ann_sd, 
-                  "Sharpe ratio"=sr, 
-                  "Skew"=skew, 
-                  "Lower tail"=lower_tail, 
-                  "Upper tail"=upper_tail, 
-                  "Max drawdown"=max_drawdown, 
-                  "Average drawdown"=avg_drawdown,
-                  "GPR"=gpr,
-                  "R2"=r2
-                  )
+  cum_returns <- cumsum(replace(df$Returns, is.na(df$Returns), 0))
+  peak <- cummax(cum_returns)
+  drawdown <- peak - cum_returns
+  max_drawdown <- -(exp(drawdown[which.max(drawdown)]) - 1) * 100
+  avg_drawdown <- -(exp(mean(drawdown)) - 1) * 100
+  gpr <- sum(df$Returns, na.rm = TRUE) / sum(abs(df$Returns[df$Returns < 0]), na.rm = TRUE)
+  cum_annual_returns <- cumsum(replace(annual_returns, is.na(annual_returns), 0))
+  r2 <- summary(lm(1:length(cum_annual_returns) ~ 0 + cum_annual_returns))$adj.r.squared
+  # turnover <- round(length(rle(as.vector(na.omit(sign(returns))))$length) / period, 1)
+  results <- list(
+    "Mean annual return" = mean_ann_ret,
+    "Annualized standard deviation" = ann_sd,
+    "Sharpe ratio" = sr,
+    "Skew" = skew,
+    "Lower tail" = lower_tail,
+    "Upper tail" = upper_tail,
+    "Max drawdown" = max_drawdown,
+    "Average drawdown" = avg_drawdown,
+    "GPR" = gpr,
+    "R2" = r2
+  )
   return(lapply(results, round, 2))
 }
-
-portfolio_summary <- function(portfolio, dates=NULL, period=252, benchmark.dates=NULL, benchmark.returns=NULL, plot_stats=FALSE, symbol_wise=FALSE) {
+portfolio_summary <- function(portfolio, dates = NULL, period = 252, benchmark.dates = NULL, benchmark.returns = NULL, plot_stats = FALSE, symbol_wise = FALSE) {
   # if(any(is.na(portfolio)))
-  #   stop("portfolio_summary: NAs are not allowed, replace them with zeros") 
-  if(!is.null(dates) & class(dates) != "Date")
+  #   stop("portfolio_summary: NAs are not allowed, replace them with zeros")
+  if (!is.null(dates) & class(dates) != "Date") {
     stop(paste("portfolio_summary: dates should be of class Date"))
-  if(class(portfolio) != "matrix")
+  }
+  if (class(portfolio) != "matrix") {
     stop(paste("portfolio_summary: portfolio should be of class matrix"))
-  if(is.null(dates)) 
+  }
+  if (is.null(dates)) {
     dates <- seq(as.Date("1970/01/01"), by = "day", length.out = length(returns))
-  returns <- rowMeans(portfolio, na.rm=TRUE)
-  results <- strategy_performance(returns, dates = dates, period=period)
-  SRs <- apply(portfolio, 2, function(x) mean(x, na.rm=TRUE) / sd(x, na.rm=TRUE) * sqrt(period))
+  }
+  returns <- rowMeans(portfolio, na.rm = TRUE)
+  results <- strategy_performance(returns, dates = dates, period = period)
+  SRs <- apply(portfolio, 2, function(x) mean(x, na.rm = TRUE) / sd(x, na.rm = TRUE) * sqrt(period))
   results[["SR avg"]] <- round(mean(SRs), 2)
   results[["SR sd"]] <- round(sd(SRs), 2)
   # Benchmark comparison
   alpha <- NA
   beta <- NA
-  if(!is.null(benchmark.dates)) {
-    benchmark <- data.frame(Dates=benchmark.dates, Returns=benchmark.returns)
-    df <- data.frame(Dates=dates, Returns=returns)
-    z <- merge(benchmark, df, by="Dates") %>% na.omit
-    z <- group_by(z, yearmonth(Dates)) %>% summarise(X=sum(Returns.x, na.rm=TRUE), Y=sum(Returns.y, na.rm=TRUE))
+  if (!is.null(benchmark.dates)) {
+    benchmark <- data.frame(Dates = benchmark.dates, Returns = benchmark.returns)
+    df <- data.frame(Dates = dates, Returns = returns)
+    z <- merge(benchmark, df, by = "Dates") %>% na.omit()
+    z <- group_by(z, yearmonth(Dates)) %>% summarise(X = sum(Returns.x, na.rm = TRUE), Y = sum(Returns.y, na.rm = TRUE))
     fit <- (lm(Y ~ X, z))
     alpha <- as.numeric(coef(fit)[1]) * 100 * 12
-    beta <- as.numeric(coef(fit)[2]) 
+    beta <- as.numeric(coef(fit)[2])
     results[["alpha"]] <- round(alpha, 2)
     results[["beta"]] <- round(beta, 2)
     results[["correlation"]] <- round(cor(z$X, z$Y, use = "pairwise.complete.obs"), 2)
   }
-  if(plot_stats) {
-    par(mfrow=c(2,1), mar=c(2,4,1,0.5))
+  if (plot_stats) {
+    layout(matrix(c(1,1,2,3), 2, 2, byrow = TRUE))
     returns <- replace(returns, is.na(returns), 0) * 100
     cum_returns <- cumsum(returns)
-    plot(sort(as.Date(dates)), cum_returns, ylab="Equity curve %")
-    chunks <- group_by(data.frame(Date=as.Date(dates), ret=returns), year(Date)) %>% 
-      summarise(sum=round(sum(ret),1), first=first(Date), .groups = 'drop')
-    abline(v=chunks$first, lty=2, lwd=0.5)
-    text(x=chunks$first+period/2, y=max(cum_returns), labels=chunks$sum, cex = 0.75)
-    matplot(apply(portfolio, 2, function(x) cumsum(replace(x, is.na(x), 0))  ), type = "l", lwd=2, lty=1, ylab="Assets curves %", xaxt="n")
-    abline(h=0, lwd=2)
-    axis(side = 1, labels=dates, at=seq(1, length(dates)), tick = FALSE)
+    plot(sort(as.Date(dates)), cum_returns, ylab = "Equity curve log%")
+    chunks <- group_by(data.frame(Date = as.Date(dates), ret = returns), year(Date)) %>%
+      summarise(sum = round(sum(ret), 1), first = first(Date), .groups = "drop")
+    abline(v = chunks$first, lty = 2, lwd = 0.5)
+    text(x = chunks$first + period / 2, y = max(cum_returns), labels = chunks$sum, cex = 0.75)
+    matplot(apply(portfolio, 2, function(x) cumsum(replace(x, is.na(x), 0))), type = "l", lwd = 2, lty = 1, ylab = "Assets curves log%", xaxt = "n")
+    abline(h = 0, lwd = 2)
+    axis(side = 1, labels = dates, at = seq(1, length(dates)), tick = FALSE)
+    peak <- cummax(cum_returns)
+    drawdown <- peak - cum_returns
+    plot(sort(as.Date(dates)), -drawdown, ylab = "Drawdown log%", type="l")
   }
   symbol_result <- NULL
-  if(symbol_wise) {
-    symbol_result <- apply(portfolio, 2, function(x) unlist(strategy_performance(x, dates = dates))) %>% t
+  if (symbol_wise) {
+    symbol_result <- apply(portfolio, 2, function(x) unlist(strategy_performance(x, dates = dates))) %>% t()
   }
-
-  return(list(Aggregate=results, Symbols=symbol_result))
+  return(list(Aggregate = results, Symbols = symbol_result))
 }
-
-
 merge_portfolio_list <- function(portfolio_list) {
-  full_df <- Reduce(function(...) full_join(..., by="Date", all=TRUE, incomparables = NA), portfolio_list) %>% arrange(Date)
+  full_df <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), portfolio_list) %>% arrange(Date)
   colnames(full_df) <- c("Date", names(portfolio_list))
-  #full_df[is.na(full_df)] <- 0
+  # full_df[is.na(full_df)] <- 0
   return(full_df)
 }
 
-# in percentages
-calculate_volatility <- function(returns, long_span=252, short_span=35,  weights=c(0.3, 0.7), period=252){
-  vol_short <- sqrt(EMA(replace(returns, is.na(returns), 0)^2, short_span))
-  vol_long <- runMean(vol_short, long_span)
-  vol <-  (weights[1] * vol_long + weights[2] * vol_short) * sqrt(period) # one year instead of ten
-  return(vol)
-}
-  
-
-Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
-target_vol <- 0.2
 
 ## Stategy 1
 {SP500 <- backadjust_future(Futures[["ES"]], N = 5)
@@ -881,6 +885,7 @@ breakout <- function(p, h=1, scalar=1) {
 
 # The backbone will be strategy 11
 {
+  {
   adjclose <- df$AdjClose; close <- df$Close; risk <- df$Volatility; basis <- df$Basis; expiry_difference <- df$Basis_distance
   cap_forecast <- function(x, cap=20) {
     return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
@@ -964,62 +969,10 @@ breakout <- function(p, h=1, scalar=1) {
     forecast <- rowMeans(do.call(cbind, Skews))
     return(forecast)
   }
-  
-    
-  
-  # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
-  # weekly data is leaded 2 days
-  load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
-    symbol_dir <- paste0(dir, "/", symbol)
-    # load daily data, lag date by one day
-    files <- list()
-    for (l in list.files(symbol_dir, pattern = "daily")) {
-      f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-      if(lagged) {
-        f[,1] <- f[,1]+1
-        f <- f[-1,]
-      }
-      colnames(f) <- c("Date", "Close")
-      files[[l]] <- f
-    }
-    # merge into one continous time series, remove possible dubplicates by keeping the last one
-    df_daily = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
-    # load weekly data, lag date by two days
-    files <- list()
-    for (l in list.files(symbol_dir, pattern = "weekly")) {
-      f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-      if(lagged) {
-        f[,1] <- f[,1]+2
-        f <- f[-1,]
-      }
-      colnames(f) <- c("Date", "Close")
-      files[[l]] <- f
-    }
-    # merge into one continous time series, remove possible dubplicates by keeping the last one
-    df_weekly = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
-    # only keep weekly data up to the start of daily data
-    df_weekly <- dplyr::filter(df_weekly, Date < df_daily$Date[7])
-    # interpolate weekly data to create daily data
-    # first, recreate full daily Date excluding weekends
-    dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% as_tibble() %>% mutate(Date=value) %>% select(-value) %>% dplyr::filter(!(wday(Date, label = TRUE) %in% c("Sat", "Sun")))
-    # then interpolate
-    df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close))
-    # merge all data
-    df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
-    
-    # load last holding cost
-    l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
-    f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-    if(dim(f)[1] == 0) {
-      warning(paste("Holding cost file empty for symbol:", symbol))
-      hc <- c(0,0)        
-    } else {
-      hc <- unlist(f[,-1])
-    }
-    return(list("Price"=df, "HC"=hc))
   }
+    
   
-  # load all CMC and other cash data
+  # load all CMC and other cash data (to test with CMC data uhmm....)
   {
   dir <- "/home/marco/trading/Systems/Monopoly/Data/Scraping"
   instruments_file  <- paste0(dir, "/", "INSTRUMENTS.csv")
@@ -1038,16 +991,16 @@ breakout <- function(p, h=1, scalar=1) {
   {
     # A subset of instrument I might actually trade
     CMC_selection <- c("ZN","GG","CC","KC","HG","ZC","CT","CL","IM","GC","HE","LE","LS","NG","ZO","OJ","ZR","ZS","ES","SB","DX","ZW","D6")
-    Assets <- BackAdj # or BackAdj[CMC_selection]
+    Assets <- BackAdj# or BackAdj[CMC_selection]
     results <- list()
-    target_vol <- 0.25
+    target_vol <- 0.5
     IDM = 2.5
     FDMtrend <- 1.33
     FDMcarry <- 1.05
     FDMcsm <- 1.4
     FDMskew <- 1.18
     # Trend, Carry, CSM, Skew
-    weights <- c(0.4, 0.4, 0, 0.2)
+    weights <- c(0.4, 0.5, 0, 0.1)
     # Asset class indices
     if(weights[3] > 0) {
       NPs <- list()
@@ -1110,7 +1063,7 @@ breakout <- function(p, h=1, scalar=1) {
       results[[symbol]] <- select(df, Date, Excess)
     }
     portfolio <- merge_portfolio_list(results)
-    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = TRUE  ) 
+    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE  ) 
     print(res$Aggregate %>% unlist)
   }
   
