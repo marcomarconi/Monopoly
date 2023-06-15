@@ -1,7 +1,7 @@
 {
-library(tidyverse)
-library(moments)
-library(TTR)
+  library(tidyverse)
+  library(Rfast)
+  library(TTR)
   library(lubridate)
   library(tsibble)
   library(zoo)
@@ -37,7 +37,7 @@ strategy_performance <- function(returns, dates = NULL, period = 252) {
   mean_ann_ret <- mean(annual_returns, na.rm = TRUE) * 100
   ann_sd <- sd(df$Returns, na.rm = TRUE) * sqrt(period) * 100
   sr <- mean(df$Returns, na.rm = TRUE) / sd(df$Returns, na.rm = TRUE) * sqrt(period)
-  skew <- skewness(monthly_returns, na.rm = TRUE)
+  skew_ <- skew(monthly_returns, na.rm = TRUE)
   q <- quantile(df$Returns[df$Returns != 0], probs = c(0.01, 0.3, 0.7, 0.99), na.rm = TRUE)
   lower_tail <- as.numeric(q[1] / q[2] / 4.43)
   upper_tail <- as.numeric(q[4] / q[3] / 4.43)
@@ -49,16 +49,17 @@ strategy_performance <- function(returns, dates = NULL, period = 252) {
   gpr <- sum(df$Returns, na.rm = TRUE) / sum(abs(df$Returns[df$Returns < 0]), na.rm = TRUE)
   cum_annual_returns <- cumsum(replace(annual_returns, is.na(annual_returns), 0))
   r2 <- summary(lm(1:length(cum_annual_returns) ~ 0 + cum_annual_returns))$adj.r.squared
-  # turnover <- round(length(rle(as.vector(na.omit(sign(returns))))$length) / period, 1)
+  # turnover <- round(length(rle(as.vector(na.omit(sign(returns))))$length) / (length(returns) / period), 1)
   results <- list(
     "Mean annual return" = mean_ann_ret,
-    "Annualized standard deviation" = ann_sd,
+    "Annualized SD" = ann_sd,
     "Sharpe ratio" = sr,
-    "Skew" = skew,
+    "Skew" = skew_,
     "Lower tail" = lower_tail,
     "Upper tail" = upper_tail,
-    "Max drawdown" = max_drawdown,
-    "Average drawdown" = avg_drawdown,
+    "Max DD" = max_drawdown,
+    "Avg DD" = avg_drawdown,
+    "Adj Avg DD" = avg_drawdown / ann_sd,
     "GPR" = gpr,
     "R2" = r2
   )
@@ -123,6 +124,13 @@ merge_portfolio_list <- function(portfolio_list) {
   colnames(full_df) <- c("Date", names(portfolio_list))
   # full_df[is.na(full_df)] <- 0
   return(full_df)
+}
+# in percentages
+calculate_volatility <- function(returns, long_span=252, short_span=35,  weights=c(0.3, 0.7), period=252){
+  vol_short <- sqrt(EMA(replace(returns, is.na(returns), 0)^2, short_span))
+  vol_long <- runMean(vol_short, long_span)
+  vol <-  (weights[1] * vol_long + weights[2] * vol_short) * sqrt(period) # one year instead of ten
+  return(vol)
 }
 
 
@@ -729,17 +737,17 @@ print(res$Aggregate %>% unlist)
 # Strategy 20
 # Same as before but applied to carry
 
-breakout <- function(p, h=1, scalar=1) {
-  if(sum(is.na(p)) > 0)
-    stop("breakout: series contains NAs")
-  minimum <- runMin(p, h)
-  maximum <- runMax(p, h)
-  mid <- (maximum + minimum) / 2
-  raw <- na.locf(40 * (p - mid) / (maximum - minimum), na.rm=FALSE)
-  forecast <- EMA(raw, ceiling(h/4)) * scalar
-}
 # Strategy 21
 {
+  breakout <- function(p, h=1, scalar=1) {
+    if(sum(is.na(p)) > 0)
+      stop("breakout: series contains NAs")
+    minimum <- runMin(p, h)
+    maximum <- runMax(p, h)
+    mid <- (maximum + minimum) / 2
+    raw <- na.locf(40 * (p - mid) / (maximum - minimum), na.rm=FALSE)
+    forecast <- EMA(raw, ceiling(h/4)) * scalar
+  }
   jumbo <- list()
   IDM = 2.41
   FDM <- 1.33
@@ -820,7 +828,6 @@ breakout <- function(p, h=1, scalar=1) {
 }
 
 # Strategy 23
-# Jumbo
 {
   jumbo <- list()
   IDM = 2.41
@@ -860,13 +867,10 @@ breakout <- function(p, h=1, scalar=1) {
     df <- BackAdj[[n]]
     df$Volatility = calculate_volatility(df$Return)
     df$Position = lag(target_vol / df$Volatility)
-    # skew1 <- c(rep(NA, 60),sapply((60+1):length(df$Return), function(i) -skewness(df$Return[(i-60-1):i], na.rm = TRUE)))
-    # skew2 <- c(rep(NA, 120),sapply((120+1):length(df$Return), function(i) -skewness(df$Return[(i-120-1):i], na.rm = TRUE)))
-    # skew3 <- c(rep(NA, 240),sapply((240+1):length(df$Return), function(i) -skewness(df$Return[(i-240-1):i], na.rm = TRUE)))
     df$Return[is.na(df$Return)] <- 0
-    skew1 <- -rollapply(df$Return, width=60, skewness,  fill=NA, align="right")
-    skew2 <- -rollapply(df$Return, width=120, skewness,  fill=NA, align="right")
-    skew3 <- -rollapply(df$Return, width=240, skewness,  fill=NA, align="right")
+    skew1 <- -rollapply(df$Return, width=60, skew,  fill=NA, align="right")
+    skew2 <- -rollapply(df$Return, width=120, skew,  fill=NA, align="right")
+    skew3 <- -rollapply(df$Return, width=240, skew,  fill=NA, align="right")
     df$Skew1 <- EMA(skew1 %>% na.locf(na.rm=FALSE), ceiling(60/4)) * 33.3
     df$Skew2 <- EMA(skew2 %>% na.locf(na.rm=FALSE), ceiling(120/4)) * 37.2
     df$Skew3 <- EMA(skew3 %>% na.locf(na.rm=FALSE), ceiling(240/4)) * 39.2
@@ -939,7 +943,7 @@ breakout <- function(p, h=1, scalar=1) {
     return(forecast)
   }
   relative_volatility <- function(volatility, period=2520) {
-    return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
+    return(rollapply(na.locf(volatility, fromLast = TRUE), width=2520, FUN=mean, partial=TRUE, fill=NA,align="right"))
   }
   normalize_price <- function(adjclose, close, volatility, period=252) {
     np <- rep(NA, length(close))
@@ -951,7 +955,7 @@ breakout <- function(p, h=1, scalar=1) {
     }
     return(np)
   }
-  cross_sectional_momentum <- function(instrument_np, class_np, spans=c(20, 40, 80, 160, 320), scalars=c(108.5, 153.5, 217.1, 296.8, 376.3)) {
+  cross_sectional_momentum <- function(instrument_np, class_np, spans=c(20, 40, 80, 160, 320), scalars=c(108.5, 153.5, 217.1, 296.8, 376.3), cap=20) {
     n <- length(spans)
     relative_np  <- (instrument_np - class_np) / 100
     Os <- lapply(1:n, function(i) EMA(c(rep(NA, spans[i]), diff(relative_np, lag=spans[i]) / spans[i]), ceiling(spans[i]/4)) * scalars[i])
@@ -960,13 +964,29 @@ breakout <- function(p, h=1, scalar=1) {
     return(forecast)
   }
   returns_skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
+    skewf <- Rfast::skew
     n <- length(spans)
     returns[is.na(returns)] <- 0
-    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skewness,  fill=NA, align="right"))
+    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skewf,  fill=NA, align="right"))
     Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
     Skews <-  lapply(1:n, function(i) EMA(Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
     Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
     forecast <- rowMeans(do.call(cbind, Skews))
+    return(forecast)
+  }
+  returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
+    n <- length(spans)
+    returns[is.na(returns)] <- 0
+    Kurtosis <- lapply(1:n, function(i) {
+                                          mult <- min(spans[i]*10, length(returns)) 
+                                          x <- rollapply(returns, width=spans[i], kurt,  fill=NA, align="right") - 3;
+                                          x[is.na(x)] <- 0
+                                          x - runMean(x, n = mult)
+                                        })
+    Kurtosis <-  lapply(1:n, function(i) replace(Kurtosis[[i]], is.na(Kurtosis[[i]]), 0))
+    Kurtosis <-  lapply(1:n, function(i) EMA(-Kurtosis[[i]], ceiling(spans[i]/4)) * scalars[i])
+    Kurtosis <- lapply(1:n, function(i) cap_forecast(Kurtosis[[i]], cap))
+    forecast <- rowMeans(do.call(cbind, Kurtosis))
     return(forecast)
   }
   }
@@ -993,16 +1013,21 @@ breakout <- function(p, h=1, scalar=1) {
     CMC_selection <- c("ZN","GG","CC","KC","HG","ZC","CT","CL","IM","GC","HE","LE","LS","NG","ZO","OJ","ZR","ZS","ES","SB","DX","ZW","D6")
     Assets <- BackAdj# or BackAdj[CMC_selection]
     results <- list()
-    target_vol <- 0.5
+    target_vol <- 0.25
     IDM = 2.5
     FDMtrend <- 1.33
     FDMcarry <- 1.05
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    # Trend, Carry, CSM, Skew
-    weights <- c(0.4, 0.5, 0, 0.1)
+    FDMkurtosis <- 1.18
+    # Trend, Carry, CSM, Skew, Kurtosis
+    weights <- list("Trend"=0, "Carry"=0, "CSM"=1, "Skew"=0, "Test"=0.0)
+    # Apply relative volatility
+    relative_vol <- FALSE
+    if(sum(unlist(weights)) != 1)
+      warning("Strategy weights do not sum to zero")
     # Asset class indices
-    if(weights[3] > 0) {
+    if(weights[["CSM"]] > 0) {
       NPs <- list()
       for(n in names(Assets)) {
         df <- Assets[[n]]
@@ -1012,52 +1037,79 @@ breakout <- function(p, h=1, scalar=1) {
         NPs[[n]] <- select(df, Date, Symbol, Class, NP, dNP)
       }
       allNPs <- do.call(rbind, NPs)
-      Asset_class_indices <- group_by(allNPs, Class, Date) %>% summarise(Symbol=Symbol, R=mean(dNP)) %>% arrange(Class, Date) %>% select(-Symbol)  %>%  unique %>% group_by( Class) %>% mutate(A=cumsum(R)) %>% ungroup()
+      Asset_class_indices <- group_by(allNPs, Class, Date) %>% summarise(Symbol=Symbol, R=mean(dNP)) %>% 
+        arrange(Class, Date) %>% select(-Symbol)  %>%  unique %>% group_by( Class) %>% mutate(A=cumsum(R)) %>% ungroup()
     }
+    # iterate over symbols
     for(symbol in names(Assets)) {
       print(symbol)
       df <- Assets[[symbol]]
       df$Volatility = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Volatility)
-      df$ForecastTrend <- df$ForecastCarry <- df$ForecastCSM <- df$ForecastSKEW <- 0
+      df$ForecastTrend <- df$ForecastCarry <- df$ForecastCSM <- df$ForecastSkew <- df$ForecastTest <- 0
       
-      # Relative volatility (strategy 13, it does not seems to add much)
+      # Relative volatility (strategy 13, improvement is minimal, and we only apply it to trend)
       df$M <- 1
-      # df$RV <- relative_volatility(df$Volatility) # quite slow, you can replace it with df$Volatility / runMean(df$Volatility, 2520))
-      # df$RV <- df$Volatility / runMean(df$Volatility, 252)
-      # df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
-      # df$M <- EMA(2 - 1.5 * df$Q, 10)
+      if(relative_vol) {
+        df$RV <- df$Volatility / relative_volatility(df$Volatility) 
+        df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
+        df$M <- EMA(2 - 1.5 * df$Q, 10)
+      }
       
       # Trend-following (strategy 9)
-      df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
-      df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
-      df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
-      df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
-      df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M
-      df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
-      
+      if(weights[["Trend"]]  > 0) {
+        df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
+        df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
+        df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
+        df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M
+        df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
+      }
       # Carry (strategy 10)
-      df$ForecastCarry <- 0
-      df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry
-      df$ForecastCarry <- cap_forecast(df$ForecastCarry)
-      
+      if(weights[["Carry"]]  > 0) {
+        df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry 
+        df$ForecastCarry <- cap_forecast(df$ForecastCarry)
+      }
       # Cross-sectional momentum (strategy 19)
-      df$ForecastCSM <- 0
-      if(weights[3]  > 0) {
+      if(weights[["CSM"]]  > 0) {
         df <- merge(df, filter(Asset_class_indices, Class==df$Class[1]) %>%  select(Date, A), by="Date") # Asset_class_indices obtained from before
         df$NP <- normalize_price(df$AdjClose, df$Close, df$Volatility)
-        df$ForecastCSM <- cross_sectional_momentum(df$NP, df$A) * FDMcsm
+        df$ForecastCSM <- cross_sectional_momentum(df$NP, df$A) * FDMcsm 
         df$ForecastCSM <- cap_forecast(df$ForecastCSM)
       }
       
       # Skewness (strategy 24)
-      if(weights[4]  > 0) {
-        df$ForecastSKEW <- returns_skew(df$Return) * FDMskew
-        df$ForecastSKEW <- cap_forecast(df$ForecastSKEW)
+      if(weights[["Skew"]]  > 0) {
+        df$ForecastSkew <- returns_skew(df$Return) * FDMskew 
+        df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
+      
+      
+      # # Kurtosis
+      # if(weights[["Test"]]  > 0) {
+      #   df$ForecastTest <- returns_kurtosis(df$Return) * FDMkurtosis
+      #   df$ForecastTest <- cap_forecast(df$ForecastTest)
+      # }
+      # Acceleration
+      # if(weights[["Test"]]  > 0) {
+      #   df$Forecast16 <- (EMA(df$AdjClose, 16) -  EMA(df$AdjClose, 64)) / (df$Close * df$Volatility / 16) * 4.1
+      #   df$Forecast32 <- (EMA(df$AdjClose, 32) -  EMA(df$AdjClose, 128)) / (df$Close * df$Volatility / 16) * 2.79
+      #   df$Forecast64 <- (EMA(df$AdjClose, 64) -  EMA(df$AdjClose, 256)) / (df$Close * df$Volatility / 16) * 1.91
+      #   df$Forecast128 <- (EMA(df$AdjClose, 128) -  EMA(df$AdjClose, 512)) / (df$Close * df$Volatility / 16) * 1.50
+      #   df$Acc16 <- c(rep(NA, 16), diff(df$Forecast16, 16)) * 1.90
+      #   df$Acc32 <- c(rep(NA, 32), diff(df$Forecast32, 32)) * 1.98
+      #   df$Acc64 <- c(rep(NA, 64), diff(df$Forecast64, 64)) * 2.05
+      #   df$Acc128 <- c(rep(NA, 128), diff(df$Forecast128, 128)) * 2.10
+      #   df$ForecastTest <- cap_forecast(rowMeans(cbind(df$Acc16 , df$Acc32 , df$Acc64, df$Acc128)) * 1.55)
+      # }
+      
       # Final trade
-      df$Trade <- (weights[1] * df$ForecastTrend + weights[2] * df$ForecastCarry + weights[3] * df$ForecastCSM + weights[4] * df$ForecastSKEW) / 10 
+      df$Trade <- (  weights[["Trend"]] * df$ForecastTrend + 
+                     weights[["Carry"]] * df$ForecastCarry + 
+                     weights[["CSM"]] * df$ForecastCSM + 
+                     weights[["Skew"]] * df$ForecastSkew + 
+                     weights[["Test"]] * df$ForecastTest) / 10 
       df$Trade <- lag(df$Trade)
       df$Excess <- df$Return * df$Position * df$Trade * IDM 
       results[[symbol]] <- select(df, Date, Excess)
@@ -1086,9 +1138,50 @@ breakout <- function(p, h=1, scalar=1) {
 # Best GPR: DC
 #
 # Correlation between strategies
-#       trend carry value skew
-# trend  1.00  0.27  0.63 0.00
-# carry  0.27  1.00  0.27 0.17
-# value  0.63  0.27  1.00 0.00
-# skew   0.00  0.17  0.00 1.00
+#                         benchmark       trend           carry           skew          acc
+# benchmark                1.00           -0.01           -0.15           0.33         -0.05
+# trend                   -0.01            1.00            0.26          -0.02          0.81
+# carry                   -0.15            0.26            1.00           0.17          0.00
+# skew                     0.33           -0.02            0.17           1.00         -0.26
+# acc                     -0.05            0.81            0.00          -0.26          1.00
+
+
+
+
+
+
+## Stategy Tailratio
+{
+  
+  # Jumbo
+  {
+    jumbo <- list()
+    IDM = 2.41
+    FDM <- 1.39
+    for(n in names(BackAdj)) {
+      print(n)
+      df <- BackAdj[[n]]
+      df$Date <- as.Date(df$Date)
+      df$Volatility = calculate_volatility(df$Return)
+      df$Position = lag(target_vol / df$Volatility)
+      df$Return[is.na(df$Return)] <- 0
+      df$Tailratio1 <- rollapply(df$Return, width=60, tailratio,  fill=NA, align="right")
+      df$Tailratio2 <- rollapply(df$Return, width=120, tailratio, fill=NA, align="right")
+      df$Tailratio3 <- rollapply(df$Return, width=240, tailratio, fill=NA, align="right")
+      df$Tailratio1 <- EMA(na.locf(df$Tailratio1, na.rm = FALSE), 60/4) * * 42.66
+      df$Tailratio2 <- EMA(na.locf(df$Tailratio2, na.rm = FALSE), 120/4) * 64.3 
+      df$Tailratio3 <- EMA(na.locf(df$Tailratio3, na.rm = FALSE), 240/4) * 89.1
+      df$Tailratio1 <- cap_forecast(df$Tailratio1)
+      df$Tailratio2 <- cap_forecast(df$Tailratio2)
+      df$Tailratio3 <- cap_forecast(df$Tailratio3)
+      df$Tailratio <- rowMeans(cbind(df$Tailratio1, df$Tailratio2, df$Tailratio3), na.rm=TRUE)
+      df$Trade <- lag(df$Tailratio / 10)
+      df$Excess <- df$Return * df$Position * df$Trade * IDM 
+      jumbo[[n]] <- select(df, Date, Excess)
+    }
+    portfolio <- merge_portfolio_list(jumbo)
+    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE, benchmark.dates = benchmark.dates, benchmark.returns = benchmark.returns ) 
+    print(res$Aggregate %>% unlist)
+  }
+}
 
