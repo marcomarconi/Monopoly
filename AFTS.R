@@ -967,14 +967,40 @@ print(res$Aggregate %>% unlist)
     skewf <- Rfast::skew
     n <- length(spans)
     returns[is.na(returns)] <- 0
-    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skewf,  fill=NA, align="right"))
+    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
     Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
     Skews <-  lapply(1:n, function(i) EMA(Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
     Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
     forecast <- rowMeans(do.call(cbind, Skews))
     return(forecast)
   }
-  returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
+  returns_skew_2 <- function(returns, spans=c(60, 120, 240), scalars=c(23, 24, 25), cap=20) {
+    n <- length(spans)
+    returns[is.na(returns)] <- 0
+    Skews <- lapply(1:n, function(i) {
+      mult <- min(spans[i]*10, length(returns)) 
+      x <- rollapply(returns, width=spans[i], skew,  fill=NA, align="right") ;
+      x[is.na(x)] <- 0
+      x - runMean(x, n = mult)
+    })
+    Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
+    Skews <-  lapply(1:n, function(i) EMA(-Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
+    Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
+    forecast <- rowMeans(do.call(cbind, Skews))
+    return(forecast)
+  }
+  returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
+    skewf <- Rfast::skew
+    n <- length(spans)
+    returns[is.na(returns)] <- 0
+    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
+    Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
+    Skews <-  lapply(1:n, function(i) EMA(Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
+    Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
+    forecast <- rowMeans(do.call(cbind, Skews))
+    return(forecast)
+  }
+  returns_kurtosis_2 <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
     Kurtosis <- lapply(1:n, function(i) {
@@ -1021,7 +1047,7 @@ print(res$Aggregate %>% unlist)
     FDMskew <- 1.18
     FDMkurtosis <- 1.18
     # Trend, Carry, CSM, Skew, Kurtosis
-    weights <- list("Trend"=0, "Carry"=0, "CSM"=1, "Skew"=0, "Test"=0.0)
+    weights <- list("Trend"=0, "Carry"=0, "CSM"=0, "Skew"=1, "Test"=0.0)
     # Apply relative volatility
     relative_vol <- FALSE
     if(sum(unlist(weights)) != 1)
@@ -1077,7 +1103,6 @@ print(res$Aggregate %>% unlist)
         df$ForecastCSM <- cross_sectional_momentum(df$NP, df$A) * FDMcsm 
         df$ForecastCSM <- cap_forecast(df$ForecastCSM)
       }
-      
       # Skewness (strategy 24)
       if(weights[["Skew"]]  > 0) {
         df$ForecastSkew <- returns_skew(df$Return) * FDMskew 

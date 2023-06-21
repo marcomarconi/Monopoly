@@ -49,7 +49,7 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6 w7 w8 w9 w10; do
   echo $w1 $w2 $w3
   f=$w1
   scrape_tmp=_scrape.$f.html
-  curl "https://query1.finance.yahoo.com/v7/finance/download/$f?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
+  curl -sS "https://query1.finance.yahoo.com/v7/finance/download/$f?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
   sed -i 's/null/NA/g' $scrape_tmp
   cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $scrape_dir/$w2/$today.$w2.daily
   head -n 2 $scrape_dir/$w2/$today.$w2.daily > $scrape_dir/$w2/$today.$w2.weekly # fake weekly data
@@ -63,7 +63,7 @@ end_date=`date +"%s"`
 while IFS=, read -r fx; do
   echo $fx
   scrape_tmp=_scrape.$fx.html
-  curl "https://query1.finance.yahoo.com/v7/finance/download/$fx=X?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
+  curl -sS "https://query1.finance.yahoo.com/v7/finance/download/$fx=X?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
   sed -i 's/null/NA/g' $scrape_tmp
   cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $fx_dir/$fx.csv
   rm $scrape_tmp

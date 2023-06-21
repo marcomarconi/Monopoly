@@ -52,3 +52,10 @@ cmc-nzd-index,nzd,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,NZD,2,0.5,0
 cmc-sek-index,sek,CMC,NA,NA,Cash,Currency,Minor,1,0.01,0.01,SEK,2,0.6,0
 cmc-sgd-index,sgd,CMC,NA,NA,Cash,Currency,Minor,1,0.01,0.01,SGD,2,0.3,0
 cmc-usd-index,usd,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,USD,2,0.25,0
+aud-huf,audhuf,CMC,NA,NA,Cash,Forex,Pair,1,800,1,HUF,1,0.13,0
+chf-pln,chfpln,CMC,NA,NA,Cash,Forex,Pair,1,500,1,PLN,1,0.00294,0
+zar-jpy,zarjpy,CMC,NA,NA,Cash,Forex,Pair,1,5000,1,JPY,1,0.022,0
+hkd-zar,hkdzar,CMC,NA,NA,Cash,Forex,Pair,1,3000,1,ZAR,1,0.00103,0
+mxn-jpy,mxnjpy,CMC,NA,NA,Cash,Forex,Pair,1,10000,1,JPY,1,0.003,0
+nok-mxn,nokmxn,CMC,NA,NA,Cash,Forex,Pair,1,4000,1,MXN,1,0.00182,0
+pln-sek,plnsek,CMC,NA,NA,Cash,Forex,Pair,1,500,1,SEK,1,0.002,0

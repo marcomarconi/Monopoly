@@ -109,3 +109,20 @@ grep priceNumberOfDecimals.*minimumSpread "_"$f.json -o | sed 's/,"minimumSpread
 done <<< `tail -n+2 INSTRUMENTS.csv` 
 
 
+
+### Scrape forex holding costs, provide a file withe the list of pairs, like "eur-usd", without quotes
+while IFS=, read -r w1; do
+  f=$w1
+  echo $f
+  # we scrape the main symbol page, where we can fine the apicode and the apikey
+  scrape=_scrape.$f.html
+  wget -q "https://www.cmcmarkets.com/en-gb/instruments/"$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  # download the "hidden" json file, where we can find the holding costs
+  wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json
+  grep .yearlyPercentageBuy.*tradingHours "_"$f.json  -o | sed -e 's/},"tradingHours//' -e 's/"[^"]*"://g' -e 's/"//g' | awk -F ","  -v f=$f ' function abs(v) {return v < 0 ? -v : v}  {if($2 == "CHARGED") b=-abs($1); else b=abs($1); if($4 == "CHARGED") s=-abs($3); else s=abs($3); print f,","b,",",s}'  > $f.holding_cost 
+
+done < fx_pairs.txt
+
+

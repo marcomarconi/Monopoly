@@ -268,12 +268,12 @@
 # Parameters (maybe pu them in a config file?)
 {
   main_dir <- "/home/marco/trading/Systems/Monopoly/Execution/"
-  positions_file <- "/home/marco/trading/Systems/Monopoly/Execution/POSITIONS.csv"
-  instrument_file <- "/home/marco/trading/Systems/Monopoly/Execution/INSTRUMENTS.csv"
-  FX_file <- "/home/marco/trading/Systems/Monopoly/Execution/FX.csv"
-  scrape_dir <- "/home/marco/trading/Systems/Monopoly/Execution/Scraping/"
-  FX_dir <- "/home/marco/trading/Systems/Monopoly/Execution/FX/"
-  logs_dir <- "/home/marco/trading/Systems/Monopoly/Execution/Logs/"
+  positions_file <- paste0(main_dir, "POSITIONS.csv")
+  instrument_file <- paste0(main_dir, "INSTRUMENTS.csv")
+  FX_file <- paste0(main_dir, "FX.csv")
+  scrape_dir <- paste0(main_dir, "Scraping/")
+  FX_dir <- paste0(main_dir, "FX/")
+  logs_dir <- paste0(main_dir, "Logs/")
   logs_instruments_dir <- paste0(logs_dir, "Instruments/")
   scrape_script <- "SCRAPE_DATA.sh"
   target_vol <- 0.50
@@ -283,13 +283,23 @@
   FDMskew <- 1.1
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
   buffering_level <- 0.2
-  trade_shadow_cost <- 1
+  trade_shadow_cost <- 0
 }
 
 ### TODO
 # check instruments_data is always well arranged by Date, check last row is yesterday's trading day
 
-capital <- 12000 # set as command line argument
+# Execute
+args = commandArgs(trailingOnly=TRUE)
+# recent lines of data to ignore, in case you skipped a day
+capital <- 0
+if(length(args) == 1)
+  capital <- as.numeric(args[1])  
+else
+  stop("Provide capital as arguments.")
+if(capital <= 0 | is.na(capital))
+  stop("Capital must be positive number")
+capital <- 13333
 {
   # create dirs&files
   today_string <- gsub("-", "", today())
@@ -300,12 +310,15 @@ capital <- 12000 # set as command line argument
   # load instruments infos and calculate instruments weights from asset classes groups (could be coded a little better maybe?)
   print("Loading symbosl info and previous positions file...")
   instruments_info <- read_csv(instrument_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
-  instruments_info$Weight <- instruments_info %>% group_by(Symbol, Class1, Class2) %>% 
-    summarise(Symbol=Symbol, n0=length(unique(instruments_info$Class1)), n1=length(unique(instruments_info$Class2[instruments_info$Class1==Class1])) , n2=length((instruments_info$Class2[instruments_info$Class2==Class2]))) %>% 
+  instruments_info$Weight <- instruments_info %>% group_by(Symbol) %>% 
+    summarise(Symbol=Symbol, 
+              n0=length(unique(instruments_info$Class1)), 
+              n1=length(unique(instruments_info$Class2[instruments_info$Class1==Class1])) , 
+              n2=length((instruments_info$Class2[instruments_info$Class2==Class2]))) %>% 
     ungroup %>% mutate(Weight=1/n0/n1/n2) %>% pull(Weight)
-  # load previous positions file
-  previous_trading <- read_csv(positions_file, col_names = TRUE, show_col_types = FALSE)
   
+  # load previous positions file
+  previous_trading <- read_csv(positions_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
        
   # scrape price and FX data
   print("Scraping price and FX data...")
@@ -390,7 +403,7 @@ capital <- 12000 # set as command line argument
     hc_max <- which.max(hc)
     hc_commission <- case_when(
                               df$Product[1] == "Cash" ~ 0,
-                              df$Product[1] == "Index" ~ 0.0087,
+                              df$Product[1] == "Index" ~ 0.03,
                               df$Product[1] == "Future" ~ 0.03,
                               TRUE ~ NA_real_)
     hc_value <- (hc[hc_max]+hc_commission)
@@ -432,18 +445,23 @@ capital <- 12000 # set as command line argument
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
     #write_csv(df, paste0(instruments_logs, "/", symbol, ".csv"))
-    results[[symbol]] <- df[2,]
+    results[[symbol]] <- df[1,]
   }
   # Final table
   today_trading <- do.call(rbind, results)
+  if(!all(previous_trading$Symbol %in% today_trading$Symbol)) {
+    missing_prev <- previous_trading$Symbol[!(previous_trading$Symbol %in% today_trading$Symbol)]
+    missing_today <- today_trading$Symbol[!(today_trading$Symbol %in% previous_trading$Symbol)]
+    stop(paste("Previous position symbols (POSITION file) and current symbols (INSTRUMENTS file) do not match. Missing in current: ", missing_prev, ", missing in previous: ", missing_today, "\nFix it manually."))
+  }
   # Dynamic portfolio
   optimal_positions <- with(today_trading, PositionRaw)
   notional_exposures <- with(today_trading, ContractSize * Close / FX)
   costs_per_contract <- with(today_trading, ContractSize * (Spread/2) / FX)
-  previous_position <- previous_trading[match(previous_trading$Symbol, today_trading$Symbol), ]$Position
+  previous_position <- previous_trading$Position
   position_dynamic <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix, 
                                         previous_position = previous_position,
-                                        costs_per_contract=costs_per_contract, trade_shadow_cost = 0)
+                                        costs_per_contract=costs_per_contract, trade_shadow_cost = trade_shadow_cost)
   position_final <- round_position(position_dynamic, today_trading$MinPosition,  today_trading$Decimals) 
   # Buffering
   res <- buffering_portfolio(capital, position_final, previous_position, notional_exposures, cov_matrix, buffering_level, target_vol)
@@ -465,17 +483,5 @@ capital <- 12000 # set as command line argument
   write_csv(today_trading, "POSITIONS.csv")
 }
 
-
-res <- list()
-for(symbol in names(instruments_data)) {
-  print(symbol)
-  df <- instruments_data[[symbol]][[1]]
-  hc <- instruments_data[[symbol]][[2]]
-  df$Return <- c(0, diff(log(df$Close)))
-  df$Volatility = calculate_volatility(df$Return)
-  df$Position = target_vol / df$Volatility
-  res[[symbol]] <- (max(hc)+0.03)  / df$Volatility 
-  plot.ts(res[[symbol]], main=symbol)#, ylim=c(-30,30)); abline(h=c(-20, 0, 20))
-}
 
 
