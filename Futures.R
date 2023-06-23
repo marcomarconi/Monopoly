@@ -1,0 +1,828 @@
+{
+  library(tidyverse)
+  library(mvtnorm)
+  library(quantmod)
+  library(forecast)
+  library(mvtnorm)
+  library(reshape2)
+  library(tsibble)
+  source("/home/marco/trading/Systems//Common/Common.R")
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  Sys.setlocale("LC_TIME", "en_US.UTF-8")
+  theme_set(theme_bw(base_size = 32))
+}
+
+
+# Load Forex data
+{
+  broker <- "Barchart"  
+  Returns <- list()
+  Prices <- list()
+  Symbols <- list()
+  dir <- paste0("/home/marco/trading/Historical Data/", broker,"/OTHER/Forex/" )
+  currencies <- c("USD", "EUR", "GBP", "CHF", "CAD", "NZD", "AUD", "JPY", "SGD", "SGD", "CZK", "HUF", "HKD", "SEK", "NOK", "MXN",  "ZAR", "DKK", "CNH", "TRY")
+  for(f in list.files(dir, pattern = ".csv")) {
+    a <- read.csv(paste0(dir, "/", f))
+    a <- zoo::na.locf(a, na.rm = FALSE)
+    f <- sub("\\.csv", "", f)
+    print(f)
+    a$Symbol <- f
+    a <- rename(a, Close=Last, Date=Time, Ticks=Volume)
+    a <- mutate(a, Date=as.Date(Date, format="%m/%d/%Y")) %>%arrange(Date) %>% mutate(Date=as.character(Date))
+    a$Return <- c(0, diff(log(a$Close)))
+    Symbols[[f]] <- a
+  }
+  df = Reduce(function(...) full_join(..., by="Date"), Symbols)
+  Returns <- df[,grep("^Date|Return", colnames(df))]
+  colnames(Returns) <- c("Date", names(Symbols))
+  Returns$Date <- as.Date(Returns$Date)
+  Returns <- arrange(Returns, Date)
+  Closes <- df[,grep("^Date|^Close", colnames(df))]
+  colnames(Closes) <- c("Date", names(Symbols))
+  Closes$Date <- as.Date(Closes$Date)
+  Closes <- arrange(Closes, Date)
+}
+
+# for some reason, scrapped CMC data are lagged one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
+merge_barchart_cmc_data <- function(symbol, future, dir="/home/marco/trading/Historical Data/CMC/", lagged=TRUE) {
+  symbol_dir <- paste0(dir, "/", symbol)
+  files <- list()
+  for (l in list.files(symbol_dir)) {
+    n <- sub(".csv", "", l)
+    f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
+    if(lagged)
+      f[,1] <- f[,1]+1
+    colnames(f) <- c("Date", n)
+    files[[n]] <- f
+  }
+  df = Reduce(function(...) full_join(..., by="Date"), files) %>% arrange(Date)
+  mg <- merge(future, df, by="Date", all=TRUE)
+  return(mg)
+}
+
+
+# Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
+load_future_contracts <- function(symbol, dir, order_years=c(80:99,0:30), order_months=c("f", "g", "h", "j", "k", "m", "n", "q", "u", "v", "x", "z")) {
+  order_years <- sapply(order_years, function(x) ifelse(x < 10, paste0("0", as.character(x)), as.character(x)))
+  order_comb <- apply(expand.grid(order_months, order_years), 1, function(x) tolower(paste0(symbol, paste0(x, collapse = ""))))
+  files <- list()
+  # load all the contracts, adding an infinite before and after each contract (so you can recognize start and end)
+  for(l in list.files(dir, pattern = ".csv")) {
+    f <- read_csv(paste0(dir, "/", l), show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time)
+    f$Date <- as.Date(f$Date, format="%m/%d/%Y") 
+    f <- arrange(f, Date)
+    f <- rbind(data.frame(Date=f$Date[1]-1, Last=NaN), f, data.frame(Date=f$Date[length(f$Date)]+1, Last=NaN))
+    files[[sub(".csv", "", l)]] <- f
+  }
+  # Join all the contracts and sort them by Date and contracts order
+  df <- Reduce(function(...) full_join(..., by="Date", all=T), files) %>% arrange(Date)
+  colnames(df) <- c("Date", names(files))
+  #order <- scan(paste0(dir, "/", order_file), what="string") %>% tolower()
+  order <- colnames(df)[-1][na.omit(match(order_comb, colnames(df)[-1]))]
+  df <- df[,c("Date", order)] %>% arrange(Date)
+  return(df)
+}
+
+# create a backadjusted future contract
+# N: days to expiration to rollover
+backadjust_future <- function(df, N=1, period=365) {
+  month_code <- setNames(1:12,c("f", "g", "h", "j", "k", "m", "n", "q", "u", "v", "x", "z"))
+  m <- as.matrix(df[,-1]) # the first column is supposed to be the Date
+  d <- as.Date(df[,1]) # dates
+  sc <- rep(NA, ncol(m)) # contracts starts
+  ec <- rep(NA, ncol(m)) # contracts ends
+  ym <- rep(yearmonth(0), ncol(m)) # contracts name in yearmonth
+  for(j in 1:ncol(m)) {
+    a <- which(is.nan(m[,j]))
+    sc[j] <- a[1]+1
+    ec[j] <- a[2]-1
+    code_j <- colnames(m)[j]
+    year_j <- as.numeric(substr(code_j, nchar(code_j)-1, nchar(code_j))); year_j <- ifelse(year_j > 40, year_j + 1900, year_j + 2000)
+    month_j <- as.numeric(month_code[substr(code_j, nchar(code_j)-2, nchar(code_j)-2)]);
+    ym[j] <- yearmonth(paste0(year_j, "-", month_j))
+  }
+  j <- 1; 
+  i <- 1; 
+  adjclose <- rep(NA, nrow(m)); # the final continous backadjusted price
+  close <- rep(NA, nrow(m)); # the current contract unadjusted price
+  basis <- rep(NA, nrow(m)); # basis as defined in gorton et. al 2013 
+  basis_price <- rep(NA, nrow(m)); # basis as defined in gorton et. al 2013 
+  basis_distance <- rep(NA, nrow(m)); # months between basis contracts
+  spot <- rep(NA, nrow(m)); # implied spot price as defined in gorton et. al 2013 
+  rollover <- rep(FALSE, nrow(m)); # rollover dates
+  contract <- rep(NA, nrow(m)); # current contract
+  maturity <- rep(NA, nrow(m)); # days to maturity
+  difference <- rep(NA, nrow(m)); # returns considering rollover (in price differences)
+  ret <- rep(NA, nrow(m)); # returns considering rollover (in log price)
+  first <- NA # first value to use to adjust
+  last <- 0 # last value to use to adjust
+  for(i in 3:(nrow(m)-1)) { # this assume first and last entries are Inf
+    ret[i] <- log(m[i,j] / m[i-1,j])
+    difference[i] <- m[i,j] - m[i-1,j]  
+    if(j < ncol(m) && i >= ec[j]-N+2) { # we have not reached the last contract and we habe not rearched the last holding day
+      j <- j + 1;
+      rollover[i] <- TRUE
+      ret[i] <- log(m[i,j] / m[i-1,j])
+      difference[i] <- m[i,j] - m[i-1,j]  
+    }
+    close[i] <- m[i,j]
+    adjclose[i] <- m[i,j] - m[i-1,j]
+    contract[i] <- colnames(m)[j]
+    maturity[i] <- ec[j] - i
+    if(j < ncol(m)) {
+      k <- ifelse(j+1 > ncol(m), ncol(m), j+1 )
+      #ratio <- m[i,j] / m[i,k])
+      basis[i] <- log(m[i,j]) - log(m[i,k]) # simple log difference between contracts
+      basis_price[i] <- m[i,j] - m[i,k] # simple price difference between contracts
+      basis_distance[i] <- ym[k] - ym[j] # distance in months
+      #basis[i] <- period * (ratio - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
+      #spot[i] <-  m[i,j] * (1 + basis[i] / period * (ec[j]-i)) # as defined in Gorton et al. 2013
+    }
+    if(!(is.na(m[i,j]) | is.nan(m[i,j]))) {
+      last <- m[i,j]
+      if(is.na(first))
+        first <- m[i,j]
+    }
+  } 
+  adjclose[is.na(adjclose)] <- 0
+  adjclose <- first + cumsum(adjclose)
+  adjclose <- adjclose + (last - adjclose[length(adjclose)])
+  final <- data.frame(
+    Date=df[,1], Close=close, AdjClose=adjclose, Return=ret, Difference=difference, Adjs=adjclose-close, 
+    Contract=contract, Rollover=rollover, Maturity=maturity,
+    Basis=basis, Basis_price=basis_price, Basis_distance=basis_distance, Spot=spot )
+  delete <- c()
+  for(i in 1:nrow(m)) # if a row wall all NAs (probably because it just stored a Nan) in the original data, remove it from the final result
+    if(all(is.na(m[i,])))
+      delete <- c(delete, i)
+  if(length(delete) > 0)
+    final <- final[-delete,]
+  return(final)
+}
+
+# create a backadjusted future spread contract
+backadjust_spread <- function(df1, df2, N1=1, N2=1, mult=c(1,1), func=backadjust_future, log=FALSE) {
+  c1 <- func(df1, N1, log=log)
+  c2 <- func(df2, N2, log=log)
+  z <- merge(c1, c2, by="Date", all=TRUE)
+  z$Adjs.x <- zoo::na.locf.default(z$Adjs.x, na.rm = FALSE, fromLast = TRUE)
+  z$Adjs.y <- zoo::na.locf.default(z$Adjs.y, na.rm = FALSE, fromLast = TRUE)
+  if(log){
+    nearest <- z$Nearest.x+log(mult[1]) - z$Nearest.y+log(mult[2])
+    backadj <- nearest + (z$Adjs.x+log(mult[1]) - z$Adjs.y+log(mult[2]))
+  }
+  else {
+    nearest <- z$Nearest.x*mult[1] - z$Nearest.y*mult[2]
+    backadj <- nearest + (z$Adjs.x*mult[1] - z$Adjs.y*mult[2])
+  }
+  
+  return(data.frame(Date=z[,1], Near1=z$Nearest.x, Near2=z$Nearest.y, 
+                    Backadj1=z$Backadjusted.x, Backadj2=z$Backadjusted.y, 
+                    Rollover1=z$Rollover.x, Rollover2=z$Rollover.y, 
+                    Adj1=z$Adjs.x , Adj2=z$Adjs.y, 
+                    Return1=z$Return.x, Return2=z$Return.y,
+                    Nearest=nearest, Backadjusted=backadj))
+}
+
+
+
+
+# Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
+load_cash_contract <- function(f) {
+  df <- read_csv(f, show_col_types = FALSE) %>% 
+    select(Time, Last) %>% rename(Date=Time) %>% mutate(Date = as.Date(Date, format="%m/%d/%Y")) %>%    arrange(f, Date) %>% 
+    mutate(Symbol=toupper(sub("y00.csv", "", f)), Return = c(0,diff(log(Last))) ) 
+  
+  return(df)
+}
+
+
+
+# build up the rollover curve given a df from load_future_contracts, assume only N x T data.frame
+rollover_curve <- function(df, forward=2, lm=FALSE) { 
+  curve_diff <- rep(NA, nrow(df))
+  curve_ret1 <- rep(NA, nrow(df))
+  curve_ret2 <- rep(NA, nrow(df))
+  if(lm) {
+    curve_lm <- rep(NA, nrow(df))
+    curve_err <- rep(NA, nrow(df))
+  }
+  m <- log(as.matrix(df[,-1]))
+  for(i in 2:nrow(m)) {
+    b <- na.omit(m[i, ])
+    b_prev <- na.omit(m[i-1, ])
+    if(length(b) < forward) 
+      next
+    b <- b[1:forward]
+    x <- 1:length(b)
+    if(lm) {
+      fit <- lm(b ~ x)
+      curve_lm[i] <- -12*coef(fit)[2]
+      curve_err[i] <- sqrt(diag(vcov(fit)))[2]
+    }
+    curve_diff[i] <- (b[forward] - b[1])
+  }
+  if(lm)
+    res <- data.frame(Date=df$Date, Basis=curve_diff, Lm=curve_lm, Err=curve_err)
+  else
+    res <- data.frame(Date=df$Date, Basis=curve_diff)
+  return(res)
+  
+}
+
+
+
+
+# create a intramarket future spread
+intramarket_spread <- function(df, N=1, D=1) {
+  m <- as.matrix(df[,-1]) # the first column is supposed to be the Date
+  d <- as.Date(df[,1])
+  sc <- rep(NA, ncol(m))
+  ec <- rep(NA, ncol(m))
+  for(j in 1:ncol(m)) {
+    a <- which(is.nan(m[,j]))
+    sc[j] <- a[1]+1
+    ec[j] <- a[2]-1
+  }
+  j <- 1; 
+  i <- 1; 
+  rollover <- rep(NA, nrow(m)); 
+  spread <- rep(NA, nrow(m)); 
+  ret <- rep(NA, nrow(m)); 
+  for(i in 2:nrow(m)) { 
+    ret[i] <- log(m[i,j] / m[i-1,j])
+    if(j < ncol(m))
+      spread[i] <- m[i,j] - m[i,j+D]
+    if(j < (ncol(m)-D) && (i >= ec[j]-N+2)) {
+      j <- j + 1;
+      rollover[i] <- TRUE
+      ret[i] <- log(m[i,j] / m[i-1,j])
+      spread[i] <- m[i,j] - m[i,j+D]
+    }
+    
+  } 
+  return(data.frame(Date=df[,1], Spread=spread, Return=ret, Rollover=rollover))
+}
+
+
+
+
+# Load futures data and calculate stuff
+{
+  stop()
+  setwd( "/home/marco/trading/Historical Data/Barchart/")
+  to_load <- read_csv("list.csv")
+  # load the full futures contracts
+  Futures <- list()
+  for(i in 1:nrow(to_load) ){
+    symbol <- as.character(to_load[i,1])
+    if(!is.null(Futures[[symbol]]))
+      next
+    print(symbol)
+    dir <- as.character(to_load[i,2])
+    Futures[[symbol]] <- load_future_contracts(symbol, dir)
+  }
+  # Backadjust the prices
+  BackAdj <- list()
+  for(symbol in names(Futures)) {
+    print(symbol)
+    BackAdj[[symbol]] <- backadjust_future(Futures[[symbol]], N=2)
+    BackAdj[[symbol]]$Symbol <- symbol
+    BackAdj[[symbol]]$Class <- to_load$Class[to_load$Symbol == symbol]
+  }
+  write_rds(BackAdj, "/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
+  # Calculate the forward curve ?
+  Basis <- list()
+  for(a in  names(Futures)) 
+    Basis[[a]] <- rollover_curve(Futures[[a]], forward = 2, lm = FALSE) # linear fitting can be wierd 
+  # Load cash data
+  setwd( "/home/marco/trading/Historical Data/Barchart/OTHER/Cash/")
+  Cash <- list()
+  for(f in list.files(".", ".csv")) {
+    symbol <- toupper(sub("y00.csv", "", f))
+    if(system(paste("wc -l ", f, " | cut -f 1 -d \" \""), intern = TRUE) == "1")
+      next
+    Cash[[symbol]] <- load_cash_contract(f)
+  }
+  
+  # create summary long-only plots
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/LongOnly")
+  setwd("Plots/LongOnly")
+  for(symbol in names(BackAdj)){
+    r <- BackAdj[[symbol]]$Return
+    d <- BackAdj[[symbol]]$Date
+    b <- BackAdj[[symbol]]$Basis
+    name <- to_load$Name[which(to_load$Symbol == symbol)]
+    r[is.na(r)] <- 0
+    bb <-  round(sum(na.omit(b) > 0, na.rm=T) / length(na.omit(b)) * 100, 1)
+    png(paste0(name, ".png"))
+    plot(d, cumsum(r), main=name, xlab="Date", ylab="Log Return", col=(b > 0 )+ 1, pch=16)
+    mtext(paste("Backwardation: ", bb, "%"), side = 3, padj = 2, adj=0.1)
+    mtext(paste("Sharpe Ratio: ", mean(r) / sd(r) * sqrt(252), "%"), side = 3, padj = 3, adj=0.1)
+    dev.off()
+  }
+  # Run a simple daily stategy based on basis
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/BasisStrategyDaily")
+  setwd("Plots/BasisStrategyDaily")
+  n <- length(BackAdj)
+  res <- data.frame(Symbol=rep(NA, n), Name=rep(NA, n), Backwardation=rep(NA, n), SR=rep(NA, n))
+  for(symbol in names(BackAdj)){
+    r <- BackAdj[[symbol]]$Return
+    d <- BackAdj[[symbol]]$Date
+    name <- to_load$Name[which(to_load$Symbol == symbol)]
+    b <- BackAdj[[symbol]]$Basis
+    b[is.na(b)] <- 0
+    r <- r * lag(ifelse(b < 0, -1, 1))
+    r[is.na(r)] <- 0
+    bb <-  round(sum(b > 0, na.rm=T) / nrow(BackAdj[[symbol]]) * 100, 1)
+    sr <- round(mean(r) / sd(r) * sqrt(252), 2)
+    #png(paste0(name, ".png"))
+    plot(d, cumsum(r), main=name, xlab="Date", ylab="Log Return")
+    mtext(paste("Backwardation: ", bb, "%"), side = 3, padj = 2, adj=0.1)
+    mtext(paste("Sharpe Ratio: ", sr, "%"), side = 3, padj = 4, adj=0.1)
+    #dev.off()
+    res[which(names(BackAdj)==symbol),] <- c(symbol, name, bb, sr)
+  }
+  # Run a simple montly stategy based on basis
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/BasisStrategyMonthly")
+  setwd("Plots/BasisStrategyMonthly")
+  n <- length(BackAdj)
+  res <- data.frame(Symbol=rep(NA, n), Name=rep(NA, n), Backwardation=rep(NA, n), SR=rep(NA, n))
+  for(symbol in names(BackAdj)){
+    df <- BackAdj[[symbol]] %>% mutate(ym = yearmonth(Date))
+    df <- group_by(df, ym) %>% summarize(Date=last(Date), Return=sum(Return), Basis=last(Basis)) %>% mutate(LastReturn=lag(Return))
+    r <- df$Return
+    date <- df$Date
+    name <- to_load$Name[which(to_load$Symbol == symbol)]
+    basis <- df$Basis
+    basis[is.na(basis)] <- 0
+    r <- r * lag(ifelse(basis < 0, -1, 1))
+    r[is.na(r)] <- 0
+    bb <-  round(sum(basis > 0, na.rm=T) / nrow(df) * 100, 1)
+    sr <- round(mean(r) / sd(r) * sqrt(12), 2)
+    png(paste0(name, ".png"))
+    plot(date, cumsum(r), main=name, xlab="Date", ylab="Log Return")
+    mtext(paste("Backwardation: ", bb, "%"), side = 3, padj = 2, adj=0.1)
+    mtext(paste("Sharpe Ratio: ", sr), side = 3, padj = 4, adj=0.1)
+    dev.off()
+    png(paste0(name, "_.png"))
+    plot(df$Basis, df$Return, main=name, xlab="Basis", ylab="Return")
+    dev.off()
+  }
+  # Create ACF and PACF or year-to-year monthly log differences 
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Acf_yearly_backadj") # select nearest of backadj
+  setwd("Plots/Acf_yearly_backadj")
+  for(symbol in names(BackAdj)){
+    df <- BackAdj[[symbol]]
+    df <-  mutate(df, Date = yearmonth(Date)) %>% group_by(Date) %>%  summarise_all(last) %>% mutate(Date=as.Date(Date))
+    r <- (df$Backadjusted - lag(df$Backadjusted, 12)) - 1 # nearest or backadjsted
+    name <- to_load$Name[which(to_load$Symbol == symbol)]
+    png(paste0(name, "_Acf.png"))
+    Acf(r, main=name, lag.max = 100)
+    dev.off()
+    png(paste0(name, "_Pacf.png"))
+    Pacf(r, main=name, lag.max = 100)
+    dev.off()
+  }
+  # Previous return effect on returns
+  n <- length(BackAdj)
+  period <- 12
+  res <- data.frame(Symbol=rep(NA, n), Name=rep(NA, n), m=as.numeric(rep(NA, n)), s=as.numeric(rep(NA, n)))
+  for(symbol in names(BackAdj)){
+    df <- BackAdj[[symbol]] %>% mutate(ym = yearmonth(Date))
+    # Comment this for daily
+    df <- group_by(df, ym) %>% summarize(Date=last(Date), Return=sum(Return, na.rm=T), Basis=last(Basis), Vol=mean(Return^2, na.rm=T)) %>% mutate(LastReturn=lag(Return))
+    r <- df$Return * 100
+    #v <- df$Vol - runMean(df$Vol)
+    q <- df$Basis
+    b <- lag(ifelse(r > 0, 1, -1))
+    #b <- lag(ifelse(v > 0, 1, -1))
+    #b <- 1
+    b <- lag(ifelse(q > 0, 1, -1))
+    #b <- lag(ifelse(q > 0 & r > 0 & v > 0, 1, ifelse(q < 0 & r < 0 & v < 0, -1, 0)))
+    r <- r * b
+    r[is.na(r)] <- 0
+    m <- mean(r) * sqrt(period)
+    s <- sd(r) * sqrt(period)
+    name <- to_load$Name[which(to_load$Symbol == symbol)]
+    res[which(names(BackAdj)==symbol),] <- c(symbol, name,  m, s)
+  }
+  # Plotting basis forward curves
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Basis") # select nearest of backadj
+  setwd("Plots/Basis")
+  s <- 25
+  for(symbol in names(Futures)){
+    # Basis curve and seasonal
+    df <- BackAdj[[symbol]] %>% filter(year(Date) > 2000)
+    p <- ggplot() + geom_line(data=df, aes(Date, Basis))  + geom_hline(yintercept = 0) + xlab("") + ylab("") +ggtitle(symbol)  + theme(text =  element_text(size = 12))
+    ggsave(paste(symbol, "_curve.png"), p, width=12, height = 9, dpi=100)
+    df <- group_by(df, M=as.integer(month(Date))) %>% summarise(m=mean(Basis, na.rm=TRUE),s=sd(Basis, na.rm=TRUE))
+    p <- ggplot(df) + geom_line(aes(M, m)) + geom_errorbar(aes(x=M, ymin=m-s, ymax=m+s), width=0.5) + geom_hline(yintercept = 0) + xlab("") + ylab("") +ggtitle(symbol)  + theme(text =  element_text(size = 12))
+    ggsave(paste(symbol, "_seasonal.png"), p, width=12, height = 9, dpi=100)
+    # Basis by contract
+    df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
+    m <- log(as.matrix(df[,-1]))
+    r <- matrix(NA, nrow = nrow(m), ncol=s-1)
+    for(i in 1:nrow(m)){
+      na <- !is.na(m[i,])
+      if(sum(na)>1)
+        r[i,] <- abs(m[i  ,na][2:s] - m[i  ,na][1]) / sd(m[i,na], na.rm=TRUE)
+    }
+    a1 <- apply(r, 2, median, na.rm=T)
+    a2 <- apply(r, 2, mad, na.rm=T) #/ sqrt(nrow(r)) 
+    p <- ggplot(data.frame(a1, a2)) + geom_line(aes(x = 1:(s-1), y=a1)) + geom_errorbar(aes(x = 1:(s-1), ymin=a1-a2, ymax=a1+a2), width=0.5) + theme(text = element_text(size = 14))
+    ggsave(filename = paste0(symbol, "_contract.png"), p, dpi=150)
+  }
+  # volatility forward curve and by contract
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Volatility") # select nearest of backadj
+  setwd("Plots/Volatility")
+  s <- 24
+  for(symbol in names(Futures)){
+    df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
+    d <- df[,1]
+    m <- log(as.matrix(df[,-1]))
+    m <- apply(m, 2, function(x) c(0, diff(x)))^2
+    r <- matrix(NA, nrow = nrow(m), ncol=(s-1))
+    f <- rep(NA, nrow(m))
+    for(i in 11:nrow(m)){
+      na <- !is.na(m[i,])
+      if(sum(na)>1) {
+        a <- m[(i-10):i  ,na] %>% colMeans(., na.rm=T) 
+        r[i,] <- log(a[2:s] / a[1])
+        f[i] <- log(a[2] / a[1])
+      }
+    }
+    a1 <- apply(r, 2, median, na.rm=T)
+    a2 <- apply(r, 2, mad, na.rm=T) #/ sqrt(nrow(r))
+    p <- ggplot(data.frame(a1, a2)) + geom_line(aes(x = 1:(s-1), y=a1))+ geom_errorbar(aes(x = 1:(s-1), ymin=a1-a2, ymax=a1+a2), width=0.5) + theme(text = element_text(size = 14))
+    ggsave(filename = paste0(symbol, "_contracts.png"), p, height = 9, width = 12, dpi=150)
+    p <- ggplot(data.frame(exp(f))) + geom_line(aes(x = as.Date(d), y=f))+ theme(text = element_text(size = 14))
+    ggsave(filename = paste0(symbol, "_curve.png"), p,  height = 9, width = 12,dpi=150)
+    # png(paste0(symbol, "_boxplot.png"))
+    # boxplot(r, main=symbol)
+    # dev.off()
+  }
+  # Convergence to barchart cash
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Convergence_cash") 
+  setwd("Plots/Convergence_cash")
+  s <- 252
+  for(symbol in names(Futures)){
+    if(!symbol %in% names(Cash))
+      next
+    df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
+    df <- merge(Cash[[symbol]], df, by="Date") %>% select(-c(Symbol,Return ))
+    r <- matrix(NA, nrow = s, ncol=ncol(df)-2) # cash - future spread over s days
+    v <- rep(NA, ncol(df)-2) # cash - future spread at expiration
+    w <- rep(NA, ncol(df)-2) # cash - future average spread
+    for(j in 3:ncol(df)){ # ingore date, last, symbol and return
+      m <- cbind(df[,2], df[,j]) %>% na.omit %>% as.matrix
+      if(nrow(m) == 0)
+        next
+      z <- log(m[,2] / m[,1])
+      a <- abs(tail(z, s))
+      if(length(a) < s)
+        a <- c(rep(NA, s-length(a)), a)
+      r[,j-2] <- a
+      v[j-2] <- tail(z, 1)
+      w[j-2] <- mean(abs(z), na.rm=T)
+    }
+    if(all(is.na(r)))
+      next
+    a1 <- apply(r, 1, median, na.rm=T)
+    a2 <- apply(r, 1, mad, na.rm=T) #/ sqrt(nrow(r)) 
+    p <- ggplot(data.frame(a1, a2)) + geom_line(aes(x = 1:s, y=a1)) + geom_errorbar(aes(x = 1:s, ymin=a1-a2, ymax=a1+a2), width=0.5) + theme(text = element_text(size = 14))
+    ggsave(filename = paste0(symbol, "_convergence.png"), p, dpi=150)
+    p <- ggplot(data.frame((v))) + geom_histogram(aes(v)) + geom_vline(xintercept = mean(w,na.rm=T)) + xlab("") + ylab("")    
+    ggsave(filename = paste0(symbol, "_spread.png"), p, dpi=150)
+  }
+  # Convergence to expected spot
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Convergence_spot") 
+  setwd("Plots/Convergence_spot")
+  s <- 252
+  for(symbol in names(Futures)){
+    df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
+    df <- merge(BackAdj[[symbol]], df, by="Date") %>% select(-c(Nearest, Backadjusted, Return,Adjs, Rollover,Basis,Spread ))
+    r <- matrix(NA, nrow = s, ncol=ncol(df)-2) # cash - future spread over s days
+    for(j in 3:ncol(df)){ # ingore date, last, symbol and return
+      m <- cbind(df[,2], df[,j]) %>% na.omit %>% as.matrix
+      if(nrow(m) == 0)
+        next
+      z <- log(m[,2] / m[,1])
+      a <- abs(tail(z, s))
+      if(length(a) < s)
+        a <- c(rep(NA, s-length(a)), a)
+      r[,j-2] <- a
+    }
+    if(all(is.na(r)))
+      next
+    a1 <- apply(r, 1, median, na.rm=T)
+    a2 <- apply(r, 1, mad, na.rm=T) #/ sqrt(nrow(r)) 
+    p <- ggplot(data.frame(a1, a2)) + geom_line(aes(x = 1:s, y=a1)) + geom_errorbar(aes(x = 1:s, ymin=a1-a2, ymax=a1+a2), width=0.5) + theme(text = element_text(size = 14))
+    ggsave(filename = paste0(symbol, "_convergence.png"), p, width=12, height=9,dpi=150)
+  }
+  # Seasonality
+  setwd("/home/marco/trading/Systems/Monopoly/")
+  dir.create("Plots/Seasonalty") 
+  setwd("Plots/Seasonalty")
+  for(symbol in names(BackAdj)){
+    df <- BackAdj[[symbol]] %>% filter(year(Date) > 2000)
+    a <- group_by(df, week(Date)) %>% summarise(Week=first(week(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
+    p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    ggsave(filename = paste0(symbol, "_yearly.png"), p, width=12, height=9,dpi=150)
+    a <- group_by(df, mday(Date)) %>% summarise(Day=first(mday(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
+    p <- ggplot(a) + geom_bar(aes(Day, Mean), stat="identity") + geom_errorbar(aes(x=Day, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    ggsave(filename = paste0(symbol, "_mday.png"), p, width=12, height=9,dpi=150)
+    a <- group_by(df, wday(Date)) %>% summarise(Day=first(wday(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
+    p <- ggplot(a) + geom_bar(aes(Day, Mean), stat="identity") + geom_errorbar(aes(x=Day, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    ggsave(filename = paste0(symbol, "_wday.png"), p, width=12, height=9,dpi=150)
+  }
+  
+  # Create data.frames to plot animated forward curve
+  forward <- 12
+  final <- list()
+  for(symbol in names(Futures)){
+    print(symbol)
+    df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
+    returns <- data.frame(Date=df$Date, apply(df[,-1], 2, function(x) c(0, diff(log(x)))^2))
+    returns <- returns %>% mutate(Date = yearmonth(Date)) %>% group_by(Date) %>%   
+      summarise(across(where(is.numeric), function(x) sum(x, na.rm=TRUE)))  %>% mutate(Date=as.Date(Date))
+    price <-  df %>% mutate(Date = yearmonth(Date)) %>% group_by(Date) %>%  summarise_all(last) %>% mutate(Date=as.Date(Date))
+    basis <- matrix(NA, nrow(price), forward)
+    volatility <- matrix(NA, nrow(returns), forward)
+    for(i in 1:nrow(price)){
+      a <- as.vector(na.omit(unlist(price[i,-1])))[1:forward]
+      a <- ((a / a[1]) - 1) * 100
+      b <- as.vector(na.omit(unlist(returns[i,-1])))[1:forward]
+      b <- log(b) - log(b[1])
+      basis[i,] <- a
+      volatility[i,] <- b
+    }
+    basis <- as.data.frame(basis)
+    basis$Date <- sub("-01$", "", price$Date)
+    volatility <- as.data.frame(volatility)
+    volatility$Date <- sub("-01$", "", returns$Date)
+    df1 <- melt(basis, id.vars = "Date") 
+    colnames(df1 ) <- c("Date", "Forward", "Value")
+    df2 <- melt(volatility, id.vars = "Date") 
+    colnames(df2 ) <- c("Date", "Forward", "Value")
+    final[[symbol]] <- df1
+    final[[symbol]]$Volatility <- df2$Value
+    final[[symbol]]$Forward <- as.integer(final[[symbol]]$Forward)
+  }
+  fig1 <- final[[symbol]]  %>%
+    plot_ly(
+      x = ~Forward, 
+      y = ~Value, # or Value
+      frame = ~Date, 
+      hoverinfo = "text",
+      type = 'scatter',
+      mode = 'markers',
+      size = 5
+    ) %>% layout(
+      yaxis = list(
+        range=c(-20,20)
+      ))
+  fig1
+}
+
+
+
+
+
+backtest_VIX <- function(df) {
+  zeros <- rep(0, nrow(df))
+  df$Trade <- 0; 
+  df$Entry <- FALSE; 
+  indicator1 <- zeros#df$Nearest - df$VIX
+  indicator2 <- df$VIX#abs(df$Nearest - df$VIX) / df$Maturity
+  filter <-    !zeros #VolatilityRatio(df$Close, 250, sma = TTR::EMA) < 0
+  exit1 <- indicator1
+  exit2 <- indicator2
+  time <- 0
+  last_contract <- ""
+  for(i in 2:nrow(df)){
+    if(is.na(indicator1[i-1]) | is.na(indicator2[i]) | is.na(df$Contract[i])  | is.na(exit1[i]) | is.na(exit2[i])  | is.na(last_contract) | is.na(df$Trade[i]))
+      next
+    df$Trade[i] <- df$Trade[i-1]
+    if(df$Trade[i] != 0)
+      time <- time + 1
+    else 
+      time <- 0
+    # Exit conditions
+    if(df$Trade[i] != 0 & time > 5) {
+        #df$Trade[i] <- 0; 
+    }
+    if(df$Trade[i] != 0 & df$Maturity[i] == 0) {
+      df$Trade[i] <- 0; 
+    }
+
+    # Entry conditions
+    if(df$Trade[i] == 0){
+      if(indicator1[i] >= 0 & indicator2[i] < 30 & last_contract != df$Contract[i]) {
+        df$Trade[i] <- -1; df$Entry[i] <- TRUE;  last_contract <- df$Contract[i] 
+      }
+      if(indicator1[i] <= 0 & indicator2[i] > 30  & last_contract != df$Contract[i]) {
+        df$Trade[i] <- 1; df$Entry[i] <- TRUE; last_contract <- df$Contract[i]
+      }
+    }
+    
+  }
+  df$indicator1 <- indicator1
+  df$indicator2 <- indicator2
+  return(df)
+}
+
+### General Back-test simulation
+backtest <- function(Symbols, strategy, period = 252, daily=TRUE, SL=0, TS=FALSE, start_year=2000, end_year=2023, notrades_exit=TRUE, leverage = 1, plot_stats=FALSE, ...)  {
+  report <- list()
+  equities <- list()  
+  used_symbols <- c()
+  VIX <- read_csv("/home/marco/trading/Historical Data/VIX_History.csv", show_col_types = FALSE) %>% mutate(Date=as.Date(sub(" 00:00", "", Date), format="%Y.%m.%d"))
+  for(s in names(Symbols)){  
+    print(s)
+    df_m <- dplyr::filter(Symbols[[s]] , dplyr::between(lubridate::year(Date), start_year, end_year));
+    if(daily)
+      df_m <-  dplyr::filter(df_m, !(lubridate::wday(lubridate::as_date(Date), label = TRUE) %in% c("Sat", "Sun")))
+    df <- df_m
+    df$Symbol <- s
+    df$Close <- df$Backadjusted
+    df$Entry <- FALSE
+    df$Return[is.na(df$Return)] <- 0
+    df$Position <- 1
+    df$Trade <- NA
+    df$ID <- NA
+    
+    if(strategy=="EMA") {
+      ema <- EMA(df$Close, 16) - EMA(df$Close, 64)
+      df$Trade <- ifelse(ema > 0, 1, 0)
+    } 
+    else if(strategy=="AS") {
+      df$As <- AbsoluteStrength(df$Close, 250)
+      df$Trade <- ifelse(df$As   > 0, 1, ifelse(df$As   < 0, -1, 0))
+    } 
+    else if(strategy=="AS_basis") {
+      as <- AbsoluteStrength(df$Close, 250)
+      basis <- AbsoluteStrength(df$Basis %>% na.locf(na.rm = FALSE), 250) 
+      df$Trade <- ifelse(as > 0 & basis  > 0, 1, ifelse(as < 0 & basis  < 0, -1, 0))
+    } 
+    else if(strategy=="NNFX") {
+      df <- backtest_NNFX(df)
+    } 
+    else if(strategy=="VIX") {
+      vix <- merge(df, VIX, by="Date", all.x=TRUE)
+      df$VIX <- vix$Close.y
+      df <- backtest_VIX(df)
+    } 
+    
+
+
+
+    df$Trade <- dplyr::lag(df$Trade)
+    df$Trade[is.na(df$Trade)] <- 0
+    tradeid <- ifelse(df$Trade > 0, 1, ifelse(df$Trade < 0, -1, 0))
+    df$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
+    df$ID[df$Trade==0] <- NA
+   
+    if(notrades_exit & all(df$Trade==0)) {
+      print(paste("No trades for symbol: ", s))
+      return(NA)
+    }
+    
+    df$Position <- dplyr::lag(df$Position)
+    df$Position[is.na(df$Position)] <- 0
+    df$PnL <-  (df$Return*df$Trade*df$Position) 
+    df$PnL[is.na(df$PnL)] <- 0
+    equities[[s]] <- df
+    report[[s]] <- get_trades_statistics(df$PnL, df$Trade, df$ID, period = period)
+    for(x in 1:length(report[[s]]))
+      if(is.nan(report[[s]][[x]]))
+        report[[s]][[x]] <- 0
+    used_symbols <- c(used_symbols, s)
+  }
+  # Statistics
+  {
+    # Print some stats
+    report <- report %>% do.call(rbind,.) %>% apply(.,2,unlist) %>% as.data.frame()
+    fit <- summary(glm(sharpe_ratio ~ 1, data = report, family = "gaussian"))
+    print(paste("Assets Sharpe Ratios mean estimation: ", round(fit$coefficients[1],2), "+-", round(fit$coefficients[2],2)))
+    # Merge all symbols results
+    full_df <- Reduce(function(...) full_join(..., by="Date", all=TRUE, incomparables = NA), equities) %>% arrange(Date)
+    # Portfolio is the PnL
+    portfolio <- full_df[,grep("Date|PnL", colnames(full_df))] 
+    colnames(portfolio) <- c("Date", used_symbols)
+    portfolio[is.na(portfolio)] <- 0
+    # Returns are original returns
+    returns <- full_df[,grep("Date|Return", colnames(full_df))]
+    colnames(returns) <- c("Date", used_symbols)
+    returns[is.na(returns)] <- 0
+    # Trades are simply -1/0/1
+    trades <- full_df[,grep("Date|Trade", colnames(full_df))]
+    colnames(trades) <- c("Date", used_symbols)
+    trades[is.na(trades)] <- 0
+    # Here I simply rescale each symbol's return by its total SD
+    portfolio_weights <- get_portofolio_weights(returns[,-1], SD=TRUE, CORR = FALSE, HRP = FALSE) # 
+    #portfolio_weights <- matrix(1/ncol(portfolio[,-1]), nrow=nrow(portfolio), ncol=ncol(portfolio)-1)
+    portfolio[,2:ncol(portfolio)] <- (as.matrix(portfolio[,-1]) * portfolio_weights)
+    # Print some statistics
+    ret_stats <- get_returns_statistics(portfolio[,-1] * leverage, period = period, dates=portfolio[,1], plot=plot_stats)
+    print(ret_stats %>% data.frame(check.names = F))
+    print(paste("Total Number of Trades: ", sum(report$total_trades)))
+    print(paste("Symbols average Won Trades (%): ", round(report$`win_trades_%` %>% mean,2), "+-", round(sd(report$`win_trades_%`) / sqrt(length(used_symbols)), 3)))
+    print(paste("Symbols average Trade Return (%): ", round(report$`avg_trade_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_return_%`) / sqrt(length(used_symbols)),3)))
+    print(paste("Symbols average Trade Win Return (%): ", round(report$`avg_trade_win_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_win_return_%`) / sqrt(length(used_symbols)),3)))
+    print(paste("Symbols average Trade Lost Return (%): ", round(report$`avg_trade_lost_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_lost_return_%`) / sqrt(length(used_symbols)),3)))
+  }
+  return(list(stats=ret_stats, report=report, equities=equities, portfolio=portfolio))
+}
+
+## Seasonality-based trades
+{
+# Oils
+df <- BackAdj[c("CB", "CL", "RB", "HO")] %>% do.call(rbind, .) %>% filter(year(Date) > 2000)
+a <- mutate(df, dom=wday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
+  mutate(Cost = case_when(Symbol == "CB" ~ 0.0005, Symbol == "CL" ~ 0.0005, Symbol == "RB" ~ 0.003, Symbol == "HO" ~ 0.003, TRUE ~ 0)) %>% 
+  mutate(Trade = case_when(dom <= 3 & Basis < 0 ~ -1, dom > 3 & Basis > 0 ~ 1, TRUE ~ 0)) %>% 
+  mutate(Excess = ifelse(is.na(Return), 0, Return*Trade)) %>% 
+  group_by(date, Symbol) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(length(rle(Trade[Trade!=0]))), Cost=first(Cost*Trades)) %>% group_by(Symbol) %>% 
+  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
+ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) #+ scale_color_viridis(discrete = TRUE)
+a %>% summarise(mean(Excess)/sd(Excess)*sqrt(52))
+# Bonds
+df <- BackAdj[c("ZN", "ZN", "ZF", "ZT", "UD", "ZB")] %>% do.call(rbind, .) %>% filter(year(Date) > 2000)
+a <-  mutate(df, dom=mday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
+  mutate(df, Trade = case_when(dom >= 25  ~ 1, dom <= 5 ~ -1, TRUE ~ 0), Cost=0) %>% 
+  mutate(Excess = ifelse(is.na(Return), 0, Return*Trade)) %>% 
+  group_by(date, Symbol) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(length(rle(Trade[Trade!=0]))), Cost=first(Cost*Trades)) %>% group_by(Symbol) %>% 
+  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
+ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) + scale_color_viridis(discrete = TRUE)
+# Lumber
+df <- BackAdj[["LS"]] %>% filter(year(Date) > 2000)
+a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>% 
+  mutate(Trend = lag(AbsoluteStrength(Backadjusted)), Cost = 0.005) %>% 
+  mutate(Trade = case_when(dom <= 3 & Basis < 0 & Trend < 0 ~ -1 , dom > 3  & Trend > 0 & Basis > 0  ~ 1, TRUE ~ 0)) %>% 
+  mutate(Excess = Return * Trade) %>% 
+  group_by(date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
+  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
+ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
+with(a, mean(Excess)/sd(Excess)*sqrt(52))
+# Copper
+df <- BackAdj[["HG"]] %>% filter(year(Date) > 2000)
+a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>% 
+  mutate( Cost = 0.0008)%>% 
+  mutate(Trade = case_when(dom == 6  ~ 1 , TRUE ~ 0)) %>% 
+  mutate(Excess = Return * Trade) %>% 
+  group_by(date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
+  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
+ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
+with(a, mean(Excess)/sd(Excess)*sqrt(52))
+}
+
+# Random stuff
+res <- backtest(BackAdj, strategy = "AS")
+{
+z <- do.call(rbind, res$equities)
+z <- res$equities$HN  
+z$As <- z$As/z$Close
+# tradeid <- ifelse(z$Trade > 0, 1, ifelse(z$Trade < 0, -1, 0))
+# z$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
+# z$ID[z$Trade==0] <- NA
+# z_trade <-  group_by(z, ID) %>% summarise(ExcessTrade = sum(PnL), Win=factor(ifelse(ExcessTrade > 0, 1, 0)), Length=n())
+# table(z_trade$Win)
+# group_by(z_trade, Win) %>% summarise(median(Length))
+z_week <- group_by(z, Date=yearweek(Date), Symbol=Symbol) %>% summarise(PnL=mean(PnL), As = first(As))
+with(z_week, plot(log(abs(As))  , PnL))
+}
+z$Volatility <- sqrt(EMA(z$Return^2, 30))
+zz <- group_by(z, ID) %>%  summarise(x=1:n(), y=abs(As),  Win=factor(ifelse(sum(PnL) > 0, 1, 0))) %>% group_by(x, Win) %>% summarise(y=mean(y, na.rm=TRUE))
+ggplot(zz) + geom_line(aes(x=x, y=y)) + facet_wrap(~Win) + theme(legend.position = "None")
+}
+
+{
+  z <- res$equities$RS
+  z <- df
+  zz <- group_by(z, ID) %>%  summarise(x=1:n(), y=abs(As),  Win=factor(ifelse(sum(Excess) > 0, 1, 0))) %>% group_by(x, Win) %>% summarise(y=mean(y, na.rm=TRUE))
+  ggplot(zz) + geom_line(aes(x=x, y=y)) + facet_wrap(~Win) + theme(legend.position = "None")
+}
+
+
+{
+b <- rnorm(1000000, 0, 0.001) %>% cumsum %>% exp
+df <- data.frame(Close=b, Return=c(0, diff(log(b))), As=AbsoluteStrength(b, 250))
+df$Trade <- lag(ifelse(df$As > 0, 1, -1))
+df$Trade[is.na(df$Trade)] <- 0
+df$Excess <- df$Trade * df$Return
+tradeid <- ifelse(df$Trade > 0, 1, ifelse(df$Trade < 0, -1, 0))
+df$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
+df$ID[df$Trade==0] <- NA
+df <- na.omit(df)
+df_trade <-  group_by(df, ID) %>% summarise(ExcessTrade = sum(Excess), Win=ifelse(ExcessTrade > 0, 1, 0), Length=n())
+table(df_trade$Win)
+}

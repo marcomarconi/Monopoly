@@ -19,7 +19,7 @@ live-cattle-cash,le,CMC,NA,NA,Future,Livestock,Cattle,0.01,500,1,USD,3,0.09,0
 lean-hogs-cash,he,CMC,NA,NA,Future,Livestock,Hogs,0.01,800,1,USD,3,0.1,0
 gold-cash,gc,CMC,NA,NA,Future,Metal,Metal,1,0.1,0.1,USD,2,0.3,0
 silver-cash,si,CMC,NA,NA,Future,Metal,Metal,1,30,1,USD,3,0.025,0
-platinum-cash,pl,CMC,NA,NA,Future,Metal,Metal,1,0.6,0.1,USD,2,1,0
+platinum-cash,pl,CMC,NA,NA,Future,Metal,Metal,1,0.7,0.1,USD,2,1,0
 palladium-cash,pa,CMC,NA,NA,Future,Metal,Metal,1,0.6,0.1,USD,2,1.49,0
 copper-cash,hg,CMC,NA,NA,Future,Metal,Metal,0.01,200,1,USD,2,0.2,0
 heating-oil-cash,lo,CMC,NA,NA,Future,Energy,Oil,1,250,1,USD,4,0.0028,0
@@ -28,14 +28,14 @@ gasoline-cash,rb,CMC,NA,NA,Future,Energy,Oil,1,250,1,USD,4,0.0025,0
 low-sulphur-gasoil-cash,lf,CMC,NA,NA,Future,Energy,Oil,1,1,1,USD,2,0.5,0
 natural-gas-cash,ng,CMC,NA,NA,Future,Energy,Gas,1,150,1,USD,3,0.003,0
 us-t-note-10-yr-cash,zn,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,0.03,0
-us-t-note-2-yr-cash,zt,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,0.015,0
-euro-bund-cash,gg,CMC,NA,NA,Future,Debt,Government,1,1,1,USD,3,0.2,0
+Euro-bobl-cash,hr,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,0.028,0
+euro-bund-cash,gg,CMC,NA,NA,Future,Debt,Government,1,1,1,USD,3,0.028,0
 uk-gilt-cash,g,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,GBP,3,0.02,0
 france-40-cash,mx,CMC,NA,NA,Index,Equity,Europe,1,0.05,0.01,EUR,2,1,0
 norway-25-cash,ow,CMC,NA,NA,Index,Equity,Europe,1,1,1,NOK,2,0.9,0
 canada-60-cash,tp,CMC,NA,NA,Index,Equity,America,1,0.5,0.1,CAD,2,0.8,0
 us-spx-500-cash,es,CMC,NA,NA,Index,Equity,America,1,0.01,0.01,USD,2,0.5,0
-australia-200-cash,ap,CMC,NA,NA,Index,Equity,Asia,1,0.05,0.01,AUD,2,1,0
+australia-200-cash,ap,CMC,NA,NA,Index,Equity,Asia,1,0.05,0.01,AUD,2,5,0
 hong-kong-50-cash,hs,CMC,NA,NA,Index,Equity,Asia,1,0.1,0.1,HKD,1,5,0
 japan-225-cash,ny,CMC,NA,NA,Index,Equity,Asia,1,1,1,JPY,2,7,0
 south-africa-40-cash,lx,CMC,NA,NA,Index,Equity,Africa,1,0.1,0.1,ZAR,1,10,0
@@ -54,7 +54,6 @@ cmc-sgd-index,sgd,CMC,NA,NA,Cash,Currency,Minor,1,0.01,0.01,SGD,2,0.3,0
 cmc-usd-index,usd,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,USD,2,0.25,0
 aud-huf,audhuf,CMC,NA,NA,Cash,Forex,Pair,1,800,1,HUF,1,0.13,0
 chf-pln,chfpln,CMC,NA,NA,Cash,Forex,Pair,1,500,1,PLN,1,0.00294,0
-zar-jpy,zarjpy,CMC,NA,NA,Cash,Forex,Pair,1,5000,1,JPY,1,0.022,0
 hkd-zar,hkdzar,CMC,NA,NA,Cash,Forex,Pair,1,3000,1,ZAR,1,0.00103,0
 mxn-jpy,mxnjpy,CMC,NA,NA,Cash,Forex,Pair,1,10000,1,JPY,1,0.003,0
 nok-mxn,nokmxn,CMC,NA,NA,Cash,Forex,Pair,1,4000,1,MXN,1,0.00182,0

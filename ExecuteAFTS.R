@@ -190,27 +190,43 @@
   }
   
 
-  
-  dynamic_portfolio <- function(capital, optimal_positions, notional_exposures, cov_matrix,
-                                previous_position = NULL, costs_per_contract = NULL, trade_shadow_cost = 1, fractional=TRUE) {
+  ## greedy algorithm to find a set of positions closest to the optimal provided. 
+  # capital : your money
+  # optimal_positions : the best unrounded positions (in contracts) corresponding to your forecast
+  # max_positions : the max allowed positions (in absolute contracts), usually corresponding to a forecast of 20
+  # notional_exposures : the value of one contract (usually ContractSize * Price / FX)
+  # cov_matrix : covariance matrix of assets (daily or weekly) returns, usually last 6 months
+  # previous_position : the previous optimal positions. Zero if not provided
+  # costs_per_contract : the cost to trade one contract, in price scale. 
+  # trade_shadow_cost : the expected number of trades in one year.
+  # fractional : TRUE is your broker allow fractional contracts, like for CFDs. FALSE for futures.
+  # max_factor : maximum multiple of optimal position allowed (e.g. if optimal position = 2, the optimized position will be <= 4).
+  dynamic_portfolio <- function(capital, optimal_positions, max_positions, notional_exposures, cov_matrix,
+                                previous_position = NULL, costs_per_contract = NULL, trade_shadow_cost = 1, fractional=TRUE, max_factor=2) {
+    # Calculate the cost of making trades. trade_shadow_cost represents the number of expected trades in year, set it zero to ignore trade costs  
     calculate_costs <- function(weights) {
       trade_gap <- abs(weights_previous - weights)
       trade_costs <- trade_shadow_cost * sum(trade_gap * costs_per_trade_in_weight)
       return(trade_costs)
     }
+    # Calculate the error of given weights from the optimal weights considering instruments correlations, plus optional costs
     evaluate <- function(weights_optimal, weights, cov_matrix) {
       solution_gap <- weights_optimal - weights
       track_error <- as.numeric(sqrt(t(solution_gap) %*% cov_matrix %*% solution_gap))
       trade_costs <- calculate_costs(weights)
       return(track_error + trade_costs)
     }
-    find_possible_new_best <- function(weights_optimal, per_contract_value, direction, best_solution, best_value, cov_matrix) {
+    find_possible_new_best <- function(weights_optimal, weights_max, per_contract_value, direction, best_solution, best_value, cov_matrix, max_factor) {
       new_best_value <- best_value
       new_solution <- best_solution
       count_assets <- length(best_solution)
       for (i in sample(1:count_assets)) {
         temp_step <- best_solution
         temp_step[i] <- temp_step[i] + per_contract_value[i] * fractional[i] * direction[i]
+        if(abs(temp_step[i]) > weights_max[i])
+          temp_step[i] <- weights_max[i] * sign(temp_step[i])
+        else if (abs(temp_step[i]) > max_factor * abs(weights_optimal[i]))
+          temp_step[i] <- max_factor * weights_optimal[i] 
         temp_objective_value <- evaluate(weights_optimal, temp_step, cov_matrix)
         if (temp_objective_value < new_best_value) {
           new_best_value <- temp_objective_value
@@ -233,12 +249,13 @@
     }
     weights_per_contract <- notional_exposures / capital
     weights_optimal <- optimal_positions * weights_per_contract 
+    weights_max <- max_positions * weights_per_contract
     weights_previous <- previous_position * weights_per_contract
     costs_per_trade_in_weight <- (costs_per_contract  / capital) / weights_per_contract
     best_solution <- rep(0, n)
     best_value <- evaluate(weights_optimal, best_solution, cov_matrix)
     while (1) {
-      res <- find_possible_new_best(weights_optimal, weights_per_contract, sign(weights_optimal), best_solution, best_value, cov_matrix)
+      res <- find_possible_new_best(weights_optimal, weights_max, weights_per_contract, sign(weights_optimal), best_solution, best_value, cov_matrix, max_factor)
       new_best_value <- res[[1]]
       new_solution <- res[[2]]
       if (new_best_value < best_value) {
@@ -282,6 +299,7 @@
   FDMcarry <- 3.3
   FDMskew <- 1.1
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
+  corr_days <- 120
   buffering_level <- 0.2
   trade_shadow_cost <- 0
 }
@@ -328,8 +346,14 @@ capital <- 13333
   # load price data from previous scrape
   print("Loading price data...")
   instruments_data <- list()
-  for(symbol in instruments_info$Symbol)
+  for(symbol in instruments_info$Symbol) {
     instruments_data[[symbol]] <- load_cmc_cash_data(symbol, scrape_dir)
+    nas <- sum(is.na(instruments_data[[symbol]]$Price$Close))
+    if(nas > 0) {
+      warning(paste(symbol, "price data has", nas, "NAs. They have been filled"))
+      instruments_data[[symbol]]$Price$Close <- na.locf(instruments_data[[symbol]]$Price$Close, na.rm=FALSE)
+    }
+  }
   
   # load FX data from previous scrape
   print("Loading FX data...")
@@ -350,7 +374,7 @@ capital <- 13333
   colnames(closes_merged) <- c("Date", names(instruments_data))
   returns_merged <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
   vols <- data.frame(Date=returns_merged$Date, apply(returns_merged[,-1], 2, function(x) calculate_volatility(x))) 
-  cor_matrix <- cor(returns_merged[,-1], use="pairwise.complete.obs")
+  cor_matrix <- cor(tail(returns_merged[,-1], corr_days), use="pairwise.complete.obs")
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
@@ -364,7 +388,7 @@ capital <- 13333
     df <- instruments_data[[symbol]][[1]]
     hc <- instruments_data[[symbol]][[2]]
     df$Symbol <- symbol
-    df$Forecast <- df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$PositionRaw <- df$PositionDynamic <- df$PositionPrevious <- df$RequiredTrade <- df$Position <- 0
+    df$Forecast <- df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$PositionMax <- df$PositionRaw <- df$PositionDynamic <- df$PositionPrevious <- df$RequiredTrade <- df$PositionRisk <- df$Position <- 0
     df$Return <- c(0, diff(log(df$Close)))
     df$Volatility = calculate_volatility(df$Return)
     fx <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(FX)
@@ -426,6 +450,8 @@ capital <- 13333
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
     df$PositionRaw <-  (df$Exposure * df$FX * df$Forecast/10) /
       (df$ContractSize * df$Close  ) 
+    df$PositionMax <- (df$Exposure * df$FX * 2) /
+      (df$ContractSize * df$Close  ) 
     {
     # df$Buffer <-  df$Exposure * buffering /
     #   (df$ContractSize * df$Close) 
@@ -456,10 +482,11 @@ capital <- 13333
   }
   # Dynamic portfolio
   optimal_positions <- with(today_trading, PositionRaw)
+  max_positions <- with(today_trading, PositionMax)
   notional_exposures <- with(today_trading, ContractSize * Close / FX)
   costs_per_contract <- with(today_trading, ContractSize * (Spread/2) / FX)
   previous_position <- previous_trading$Position
-  position_dynamic <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix, 
+  position_dynamic <- dynamic_portfolio(capital, optimal_positions, max_positions, notional_exposures,  cov_matrix, 
                                         previous_position = previous_position,
                                         costs_per_contract=costs_per_contract, trade_shadow_cost = trade_shadow_cost)
   position_final <- round_position(position_dynamic, today_trading$MinPosition,  today_trading$Decimals) 
@@ -478,6 +505,7 @@ capital <- 13333
   today_trading$PositionPrevious <- previous_position
   today_trading$PositionDynamic <- position_dynamic
   today_trading$Position <- position_final
+  today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility))
   today_trading$RequiredTrade <- required_trades
   write_csv(previous_trading, paste0(logs_dir, "/", today_string, ".POSITIONS.csv"))
   write_csv(today_trading, "POSITIONS.csv")

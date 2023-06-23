@@ -7,6 +7,7 @@
   library(zoo)
   library(moments)
   library(ggthemes)
+  library(Rfast)
   source("/home/marco/trading/Systems/Common/Indicators.R")
   
 }
@@ -37,7 +38,7 @@ strategy_performance <- function(returns, dates = NULL, period = 252) {
   mean_ann_ret <- mean(annual_returns, na.rm = TRUE) * 100
   ann_sd <- sd(df$Returns, na.rm = TRUE) * sqrt(period) * 100
   sr <- mean(df$Returns, na.rm = TRUE) / sd(df$Returns, na.rm = TRUE) * sqrt(period)
-  skew_ <- skew(monthly_returns, na.rm = TRUE)
+  skew_ <- skew(monthly_returns)
   q <- quantile(df$Returns[df$Returns != 0], probs = c(0.01, 0.3, 0.7, 0.99), na.rm = TRUE)
   lower_tail <- as.numeric(q[1] / q[2] / 4.43)
   upper_tail <- as.numeric(q[4] / q[3] / 4.43)
