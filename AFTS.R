@@ -943,6 +943,12 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, EMAs))
     return(forecast)
   }
+  multiple_cor <- function(adjclose.x, adjclose.y, spans=c(20, 60, 120, 250)) {
+    n <- length(spans)
+    COR <- lapply(1:n, function(i) runCor(df$AdjClose, df$ES, n = spans[i]) %>% na.locf(., na.rm=FALSE))
+    forecast <- rowMeans(do.call(cbind, COR))
+    return(forecast)
+  }
   relative_volatility <- function(volatility, period=2520) {
     return(rollapply(na.locf(volatility, fromLast = TRUE), width=2520, FUN=mean, partial=TRUE, fill=NA,align="right"))
   }
@@ -1048,7 +1054,7 @@ print(res$Aggregate %>% unlist)
     FDMskew <- 1.18
     FDMkurtosis <- 1.18
     # Trend, Carry, CSM, Skew, Kurtosis
-    weights <- list("Trend"=0, "Carry"=0, "CSM"=0, "Skew"=1, "Test"=0.0)
+    weights <- list("Trend"=1, "Carry"=0, "CSM"=0, "Skew"=0, "Test"=0)
     # Apply relative volatility
     relative_vol <- FALSE
     if(sum(unlist(weights)) != 1)
@@ -1069,7 +1075,7 @@ print(res$Aggregate %>% unlist)
     }
     # iterate over symbols
     for(symbol in names(Assets)) {
-      print(symbol)
+      cat(paste(symbol, ""))
       df <- Assets[[symbol]]
       df$Volatility = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Volatility)
@@ -1082,19 +1088,21 @@ print(res$Aggregate %>% unlist)
         df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
         df$M <- EMA(2 - 1.5 * df$Q, 10)
       }
-      
+      # Correlation with market
+      df <- merge(df, select(BackAdj$ES, Date, AdjClose) %>% mutate(ES=AdjClose) %>% select(-AdjClose), by="Date") 
+      df$Cor <- 0#multiple_cor(df$AdjClose, df$ES) 
       # Trend-following (strategy 9)
       if(weights[["Trend"]]  > 0) {
         df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
-        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M * (-df$Cor+1.0)
         df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
       }
       # Carry (strategy 10)
       if(weights[["Carry"]]  > 0) {
-        df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry 
+        df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry  * (-df$Cor+1.0)
         df$ForecastCarry <- cap_forecast(df$ForecastCarry)
       }
       # Cross-sectional momentum (strategy 19)
@@ -1106,7 +1114,7 @@ print(res$Aggregate %>% unlist)
       }
       # Skewness (strategy 24)
       if(weights[["Skew"]]  > 0) {
-        df$ForecastSkew <- returns_skew(df$Return) * FDMskew 
+        df$ForecastSkew <- returns_skew(df$Return) * FDMskew  * (-df$Cor+1.0)
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
@@ -1140,8 +1148,9 @@ print(res$Aggregate %>% unlist)
       df$Excess <- df$Return * df$Position * df$Trade * IDM 
       results[[symbol]] <- select(df, Date, Excess)
     }
+    print("")
     portfolio <- merge_portfolio_list(results)
-    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE  ) 
+    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = TRUE  ) 
     print(res$Aggregate %>% unlist)
   }
   

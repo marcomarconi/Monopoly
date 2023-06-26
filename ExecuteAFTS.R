@@ -1,12 +1,12 @@
 {
-  library(tidyverse)
-  library(moments)
-  library(TTR)
-  library(lubridate)
-  library(tsibble)
-  library(zoo)
-  library(moments)
-  library(ggthemes)
+  suppressMessages(library(tidyverse))
+  suppressMessages(library(moments))
+  suppressMessages(library(TTR))
+  suppressMessages(library(lubridate))
+  suppressMessages(library(tsibble))
+  suppressMessages(library(zoo))
+  suppressMessages(library(moments))
+  suppressMessages(library(ggthemes))
 }
 
 
@@ -311,16 +311,19 @@
 args = commandArgs(trailingOnly=TRUE)
 # recent lines of data to ignore, in case you skipped a day
 capital <- 0
-if(length(args) == 1)
+if(length(args) == 1) {
   capital <- as.numeric(args[1])  
-else
+}else{
   stop("Provide capital as arguments.")
+}
 if(capital <= 0 | is.na(capital))
   stop("Capital must be positive number")
-capital <- 13333
+
 {
+  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Buffering level:", buffering_level))
   # create dirs&files
   today_string <- gsub("-", "", today())
+  now_string <- gsub("-| |:", "", now())
   instruments_logs <- paste0(logs_instruments_dir, today_string)
   if(!dir.exists(instruments_logs))
     dir.create(instruments_logs)
@@ -337,11 +340,11 @@ capital <- 13333
   
   # load previous positions file
   previous_trading <- read_csv(positions_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
-       
+
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
@@ -388,7 +391,7 @@ capital <- 13333
     df <- instruments_data[[symbol]][[1]]
     hc <- instruments_data[[symbol]][[2]]
     df$Symbol <- symbol
-    df$Forecast <- df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$PositionMax <- df$PositionRaw <- df$PositionDynamic <- df$PositionPrevious <- df$RequiredTrade <- df$PositionRisk <- df$Position <- 0
+    df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionRaw <- df$PositionDynamic  <- df$RequiredTrade <- df$BufferUp <- df$BufferLow <- df$PositionPrevious <- df$Position <- df$PositionRisk  <- 0
     df$Return <- c(0, diff(log(df$Close)))
     df$Volatility = calculate_volatility(df$Return)
     fx <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(FX)
@@ -453,10 +456,11 @@ capital <- 13333
     df$PositionMax <- (df$Exposure * df$FX * 2) /
       (df$ContractSize * df$Close  ) 
     {
-    # df$Buffer <-  df$Exposure * buffering /
-    #   (df$ContractSize * df$Close) 
-    # df$BufferUp <- df$Position + df$Buffer
-    # df$BufferLow <- df$Position - df$Buffer
+    buffer <- buffering_level * (df$Exposure * df$FX * 10/10) /
+      (df$ContractSize * df$Close)
+    df$BufferUp <- round(df$PositionRaw + buffer, df$Decimals)
+    df$BufferLow <- round(df$PositionRaw - buffer, df$Decimals)
+    
     # A little simulation of position buffering, it can be removed
     # df$PositionSim <- NA
     # df$PositionSim[1] <- 0
@@ -470,7 +474,7 @@ capital <- 13333
     }
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
-    #write_csv(df, paste0(instruments_logs, "/", symbol, ".csv"))
+    write_csv(df, paste0(instruments_logs, "/", symbol, ".csv"))
     results[[symbol]] <- df[1,]
   }
   # Final table
@@ -505,9 +509,9 @@ capital <- 13333
   today_trading$PositionPrevious <- previous_position
   today_trading$PositionDynamic <- position_dynamic
   today_trading$Position <- position_final
-  today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility))
+  today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   today_trading$RequiredTrade <- required_trades
-  write_csv(previous_trading, paste0(logs_dir, "/", today_string, ".POSITIONS.csv"))
+  write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
   write_csv(today_trading, "POSITIONS.csv")
 }
 
