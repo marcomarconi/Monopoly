@@ -324,12 +324,17 @@ if(capital <= 0 | is.na(capital))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
-  instruments_logs <- paste0(logs_instruments_dir, today_string)
-  if(!dir.exists(instruments_logs))
-    dir.create(instruments_logs)
-
+  if(!dir.exists(logs_dir))
+    dir.create(logs_dir)
+  if(!dir.exists(logs_instruments_dir))
+    dir.create(logs_instruments_dir)
+  if(!dir.exists(scrape_dir))
+    dir.create(scrape_dir)
+  if(!dir.exists(FX_dir))
+    dir.create(FX_dir)
+  
   # load instruments infos and calculate instruments weights from asset classes groups (could be coded a little better maybe?)
-  print("Loading symbosl info and previous positions file...")
+  print("Loading symbols info and previous positions file...")
   instruments_info <- read_csv(instrument_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
   instruments_info$Weight <- instruments_info %>% group_by(Symbol) %>% 
     summarise(Symbol=Symbol, 
@@ -344,11 +349,11 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
-  instruments_data <- list()
+  instruments_all(previous_trading$Symbol %in% today_trading$Symbol)data <- list()
   for(symbol in instruments_info$Symbol) {
     instruments_data[[symbol]] <- load_cmc_cash_data(symbol, scrape_dir)
     nas <- sum(is.na(instruments_data[[symbol]]$Price$Close))
@@ -456,11 +461,7 @@ if(capital <= 0 | is.na(capital))
     df$PositionMax <- (df$Exposure * df$FX * 2) /
       (df$ContractSize * df$Close  ) 
     {
-    buffer <- buffering_level * (df$Exposure * df$FX * 10/10) /
-      (df$ContractSize * df$Close)
-    df$BufferUp <- round(df$PositionRaw + buffer, df$Decimals)
-    df$BufferLow <- round(df$PositionRaw - buffer, df$Decimals)
-    
+
     # A little simulation of position buffering, it can be removed
     # df$PositionSim <- NA
     # df$PositionSim[1] <- 0
@@ -474,7 +475,7 @@ if(capital <= 0 | is.na(capital))
     }
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
-    write_csv(df, paste0(instruments_logs, "/", symbol, ".csv"))
+    write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
     results[[symbol]] <- df[1,]
   }
   # Final table
@@ -507,8 +508,15 @@ if(capital <= 0 | is.na(capital))
   }
   # Final positions trading file
   today_trading$PositionPrevious <- previous_position
+  buffer <- with(today_trading, buffering_level * (Exposure * FX * 10/10) / (ContractSize * Close))
+  today_trading$BufferUp <- with(today_trading, round(PositionPrevious + buffer, Decimals))
+  today_trading$BufferLow <- with(today_trading, round(PositionPrevious - buffer, Decimals))
   today_trading$PositionDynamic <- position_dynamic
-  today_trading$Position <- position_final
+  if(portfolio_update_requred) {
+    today_trading$Position <- position_final
+  }else{
+    today_trading$Position <- previous_position
+  }
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   today_trading$RequiredTrade <- required_trades
   write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
