@@ -13,11 +13,12 @@
 
 # Functions
 {
-  decimalnumcount<-function(x){
-    stopifnot(class(x)=="numeric")
-    x <- as.character(x)
-    x<-gsub("(.*)(\\.)|([0]*$)","",x)
-    nchar(x)
+  decimalplaces <- function(x) {
+    if ((x %% 1) != 0) {
+      nchar(strsplit(sub('0+$', '', as.character(x)), ".", fixed=TRUE)[[1]][[2]])
+    } else {
+      return(0)
+    }
   }
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
@@ -185,8 +186,8 @@
     return(forecast)
   }
   
-  round_position <- function(position, min_position, decimals) {
-    return(ifelse(abs(position) < min_position,  0, round(position, decimals) ))
+  round_position <- function(position, min_position, ticksize) {
+    return(ifelse(abs(position) < min_position,  0, round(position, sapply(ticksize, decimalplaces ))))
   }
   
 
@@ -268,15 +269,15 @@
     return(best_solution / weights_per_contract)
   }
   
-  buffering_portfolio <- function(capital, current_position, previous_position, notional_exposures, cov_matrix, buffering_level, target_vol) {
+  buffering_portfolio <- function(capital, optimized_position, previous_position, notional_exposures, cov_matrix, portfolio_buffering_level, target_vol) {
     weights_per_contract <- notional_exposures / capital
-    optimized_portfolio_weight <- current_position * weights_per_contract 
+    optimized_portfolio_weight <- optimized_position * weights_per_contract 
     previous_portfolio_weight <- previous_position * weights_per_contract 
     tracking_error_current_weight <- optimized_portfolio_weight - previous_portfolio_weight
     tracking_error <- as.numeric(sqrt(t(tracking_error_current_weight) %*% cov_matrix %*% tracking_error_current_weight))
-    adjustment_factor <- max((tracking_error - buffering_level/2 * target_vol) / tracking_error, 0)
-    required_trade <- adjustment_factor * (current_position - previous_position)
-    return(list(required_trade, tracking_error))
+    adjustment_factor <- max((tracking_error - portfolio_buffering_level/2 * target_vol) / tracking_error, 0)
+    required_trade <- adjustment_factor * (optimized_position - previous_position) 
+    return(list(required_trade, tracking_error, adjustment_factor))
   }
   
 }
@@ -300,7 +301,8 @@
   FDMskew <- 1.1
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
   corr_days <- 120
-  buffering_level <- 0.2
+  portfolio_buffering_level <- 0.1
+  position_buffering_level <- 0.1
   trade_shadow_cost <- 0
 }
 
@@ -320,7 +322,7 @@ if(capital <= 0 | is.na(capital))
   stop("Capital must be positive number")
 
 {
-  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Buffering level:", buffering_level))
+  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Buffering level:", portfolio_buffering_level))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
@@ -339,22 +341,25 @@ if(capital <= 0 | is.na(capital))
   instruments_info$Weight <- instruments_info %>% group_by(Symbol) %>% 
     summarise(Symbol=Symbol, 
               n0=length(unique(instruments_info$Class1)), 
-              n1=length(unique(instruments_info$Class2[instruments_info$Class1==Class1])) , 
+              n1=length(unique(instruments_info$Class2[instruments_info$Class1==Class1])), 
               n2=length((instruments_info$Class2[instruments_info$Class2==Class2]))) %>% 
     ungroup %>% mutate(Weight=1/n0/n1/n2) %>% pull(Weight)
   
   # load previous positions file
+  if(!file.exists(positions_file))
+    stop("Previous positions file does not exists.")
   previous_trading <- read_csv(positions_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
 
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
-  instruments_all(previous_trading$Symbol %in% today_trading$Symbol)data <- list()
+  instruments_data <- list()
   for(symbol in instruments_info$Symbol) {
+    cat(paste(symbol, ""))
     instruments_data[[symbol]] <- load_cmc_cash_data(symbol, scrape_dir)
     nas <- sum(is.na(instruments_data[[symbol]]$Price$Close))
     if(nas > 0) {
@@ -396,7 +401,7 @@ if(capital <= 0 | is.na(capital))
     df <- instruments_data[[symbol]][[1]]
     hc <- instruments_data[[symbol]][[2]]
     df$Symbol <- symbol
-    df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionRaw <- df$PositionDynamic  <- df$RequiredTrade <- df$BufferUp <- df$BufferLow <- df$PositionPrevious <- df$Position <- df$PositionRisk  <- 0
+    df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionOptimal <- df$PositionOptimized <- df$AdjFactor  <- df$RequiredTrade <- df$Buffer <- df$Trading <- df$PositionPrevious <- df$PositionUnrounded <- df$Position <- df$PositionRisk  <- 0
     df$Return <- c(0, diff(log(df$Close)))
     df$Volatility = calculate_volatility(df$Return)
     fx <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(FX)
@@ -456,7 +461,7 @@ if(capital <= 0 | is.na(capital))
     df$Forecast <- cap_forecast(df$Forecast)
     df$InstCapital <- capital * df$Weight * IDM 
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
-    df$PositionRaw <-  (df$Exposure * df$FX * df$Forecast/10) /
+    df$PositionOptimal <-  (df$Exposure * df$FX * df$Forecast/10) /
       (df$ContractSize * df$Close  ) 
     df$PositionMax <- (df$Exposure * df$FX * 2) /
       (df$ContractSize * df$Close  ) 
@@ -486,7 +491,7 @@ if(capital <= 0 | is.na(capital))
     stop(paste("Previous position symbols (POSITION file) and current symbols (INSTRUMENTS file) do not match. Missing in current: ", missing_prev, ", missing in previous: ", missing_today, "\nFix it manually."))
   }
   # Dynamic portfolio
-  optimal_positions <- with(today_trading, PositionRaw)
+  optimal_positions <- with(today_trading, PositionOptimal)
   max_positions <- with(today_trading, PositionMax)
   notional_exposures <- with(today_trading, ContractSize * Close / FX)
   costs_per_contract <- with(today_trading, ContractSize * (Spread/2) / FX)
@@ -494,31 +499,25 @@ if(capital <= 0 | is.na(capital))
   position_dynamic <- dynamic_portfolio(capital, optimal_positions, max_positions, notional_exposures,  cov_matrix, 
                                         previous_position = previous_position,
                                         costs_per_contract=costs_per_contract, trade_shadow_cost = trade_shadow_cost)
-  position_final <- round_position(position_dynamic, today_trading$MinPosition,  today_trading$Decimals) 
+  position_optimized <- round_position(position_dynamic, today_trading$MinPosition,  today_trading$TickSize) 
   # Buffering
-  res <- buffering_portfolio(capital, position_final, previous_position, notional_exposures, cov_matrix, buffering_level, target_vol)
+  res <- buffering_portfolio(capital, position_optimized, previous_position, notional_exposures, cov_matrix, portfolio_buffering_level, target_vol)
   required_trades <- res[[1]]
   portfolio_tracking_error <- res[[2]]
-  print(paste("Portfolio tracking error:", round(portfolio_tracking_error, 3), "against buffer level", buffering_level/2*target_vol))
-  portfolio_update_requred <- ifelse(all(required_trades == 0), FALSE, TRUE)
-  if(portfolio_update_requred) {
-    print("Portfolio update requited, check 'RequitedTrade' column in the positions file.")
-  } else {
-    print("No portfolio update requited.")
-  }
-  # Final positions trading file
+  adjustment_factor <- res[[3]]
+  print(paste("Portfolio tracking error:", round(portfolio_tracking_error, 3), "against buffer level", portfolio_buffering_level/2*target_vol, "adjustment factor:", round(adjustment_factor, 3)))
+  # Update final positions
   today_trading$PositionPrevious <- previous_position
-  buffer <- with(today_trading, buffering_level * (Exposure * FX * 10/10) / (ContractSize * Close))
-  today_trading$BufferUp <- with(today_trading, round(PositionPrevious + buffer, Decimals))
-  today_trading$BufferLow <- with(today_trading, round(PositionPrevious - buffer, Decimals))
-  today_trading$PositionDynamic <- position_dynamic
-  if(portfolio_update_requred) {
-    today_trading$Position <- position_final
-  }else{
-    today_trading$Position <- previous_position
-  }
-  today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
+  today_trading$PositionOptimized <- position_optimized
+  today_trading$AdjFactor <- adjustment_factor
+  today_trading$Buffer <- with(today_trading, position_buffering_level * (Exposure * FX * 10/10) / (ContractSize * Close)) # buffering is the minimal position change allowed, equal to 1 forecast
   today_trading$RequiredTrade <- required_trades
+  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer)
+  today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))  
+  today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, MinPosition, TickSize))  
+  today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
+  print("Positions to update:")
+  print(today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, PositionOptimized, PositionOptimal, Forecast))
   write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
   write_csv(today_trading, "POSITIONS.csv")
 }

@@ -996,15 +996,14 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, Skews))
     return(forecast)
   }
-  returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
-    skewf <- Rfast::skew
+  returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
-    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
-    Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
-    Skews <-  lapply(1:n, function(i) EMA(Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
-    Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
-    forecast <- rowMeans(do.call(cbind, Skews))
+    Kurtosis <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], kurt,  fill=NA, align="right"))
+    Kurtosis <-  lapply(1:n, function(i) replace(Kurtosis[[i]], is.na(Kurtosis[[i]]), 0))
+    Kurtosis <-  lapply(1:n, function(i) EMA(Kurtosis[[i]], ceiling(spans[i]/4)) * scalars[i])
+    Kurtosis <- lapply(1:n, function(i) cap_forecast(Kurtosis[[i]], cap))
+    forecast <- rowMeans(do.call(cbind, Kurtosis))
     return(forecast)
   }
   returns_kurtosis_2 <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
