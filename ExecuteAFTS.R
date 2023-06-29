@@ -353,7 +353,7 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
@@ -465,19 +465,6 @@ if(capital <= 0 | is.na(capital))
       (df$ContractSize * df$Close  ) 
     df$PositionMax <- (df$Exposure * df$FX * 2) /
       (df$ContractSize * df$Close  ) 
-    {
-
-    # A little simulation of position buffering, it can be removed
-    # df$PositionSim <- NA
-    # df$PositionSim[1] <- 0
-    # for(i in 2:nrow(df)) {
-    #   df$PositionSim[i] <- df$PositionSim[i-1]
-    #   if(is.na(df$BufferUp[i]) | is.na(df$Position[i]))
-    #     next
-    #   if(df$PositionSim[i-1] > df$BufferUp[i] | df$PositionSim[i-1] < df$BufferLow[i])
-    #     df$PositionSim[i] <- df$Position[i]
-    # }
-    }
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
     write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
@@ -512,12 +499,13 @@ if(capital <= 0 | is.na(capital))
   today_trading$AdjFactor <- adjustment_factor
   today_trading$Buffer <- with(today_trading, position_buffering_level * (Exposure * FX * 10/10) / (ContractSize * Close)) # buffering is the minimal position change allowed, equal to 1 forecast
   today_trading$RequiredTrade <- required_trades
-  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer)
+  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer & abs(RequiredTrade) > MinPosition)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))  
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, MinPosition, TickSize))  
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   print("Positions to update:")
-  print(today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, PositionOptimized, PositionOptimal, Forecast))
+  trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, PositionOptimized, PositionOptimal, Forecast)
+  print(trades, n=nrow(trades))
   write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
   write_csv(today_trading, "POSITIONS.csv")
 }

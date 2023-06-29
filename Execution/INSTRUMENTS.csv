@@ -26,7 +26,7 @@ heating-oil-cash,lo,CMC,NA,NA,Future,Energy,Oil,1,250,1,USD,4,0.0028,0
 crude-oil-west-texas-cash,cl,CMC,NA,NA,Future,Energy,Oil,1,8,1,USD,3,25,0
 gasoline-cash,rb,CMC,NA,NA,Future,Energy,Oil,1,250,1,USD,4,0.0025,0
 low-sulphur-gasoil-cash,lf,CMC,NA,NA,Future,Energy,Oil,1,1,1,USD,2,0.5,0
-natural-gas-cash,ng,CMC,NA,NA,Future,Energy,Gas,1,150,1,USD,3,3,0
+natural-gas-cash,ng,CMC,NA,NA,Future,Energy,Gas,1,100,1,USD,3,3,0
 us-t-note-10-yr-cash,zn,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,0.03,0
 Euro-bobl-cash,hr,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,28,0
 euro-bund-cash,gg,CMC,NA,NA,Future,Debt,Government,1,1,1,USD,3,28,0
