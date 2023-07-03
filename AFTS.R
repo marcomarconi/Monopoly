@@ -1083,7 +1083,7 @@ print(res$Aggregate %>% unlist)
       # Relative volatility (strategy 13, improvement is minimal, and we only apply it to trend)
       df$M <- 1
       if(relative_vol) {
-        df$RV <- df$Volatility / relative_volatility(df$Volatility) 
+        df$RV <- relative_volatility(df$Volatility) 
         df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
         df$M <- EMA(2 - 1.5 * df$Q, 10)
       }
