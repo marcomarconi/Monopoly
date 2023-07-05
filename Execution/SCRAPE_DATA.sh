@@ -65,7 +65,7 @@ while IFS=, read -r fx; do
   scrape_tmp=_scrape.$fx.html
   curl -sS "https://query1.finance.yahoo.com/v7/finance/download/$fx=X?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
   sed -i 's/null/NA/g' $scrape_tmp
-  cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $fx_dir/$fx.csv
+  cut -f 1,6 -d "," $scrape_tmp  > $fx_dir/$fx.csv
   rm $scrape_tmp
 done < $fx_file
 

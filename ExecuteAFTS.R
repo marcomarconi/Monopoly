@@ -353,7 +353,7 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
@@ -374,9 +374,15 @@ if(capital <= 0 | is.na(capital))
   FX_names <- read_csv(FX_file, col_names = FALSE, show_col_types = FALSE) %>% unlist 
   files <- list()
   for(fx in FX_names) {
+    print(fx)
     f <- read_csv(paste0(FX_dir, "/", fx, ".csv"), col_names = TRUE, show_col_types = FALSE)
     colnames(f) <- c("Date", "Rate")
-    files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(2) %>% head(1) # we take yesterday's rate, to match CMC data
+    print(nrow(f))
+    if(nrow(f) > 1) {
+      files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(2) %>% head(1) ### we take yesterday's rate, to match CMC data
+    }else{
+      files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(1)
+    }
   }
   FX_rates <- do.call(rbind, files) %>% mutate(FX=toupper(sub("eur", "", FX_names))) 
   colnames(FX_rates) <- c("Date", "Rate", "FX")
@@ -503,7 +509,7 @@ if(capital <= 0 | is.na(capital))
   today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer & abs(RequiredTrade) > TickSize & abs(RequiredTrade) > MinPosition)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))  
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, MinPosition, TickSize))  
-  today_trading$Trading <- with(today_trading, ifelse(Position != PositionPrevious, TRUE, FALSE))
+  #today_trading$Trading <- with(today_trading, ifelse(Position != PositionPrevious, TRUE, FALSE))
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast)
