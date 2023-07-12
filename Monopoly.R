@@ -827,16 +827,4 @@ fit_ <- m3.5$sample(data=list(N=length(y), y=y, m0=c(y[1], 0) , P0=diag(c(1,1)) 
                     chains  =1, iter_warmup = 500, iter_sampling = 500)
 
 
-aa <- apply(outlook[,-1] %>% tail(324) %>% head(307), 2, function(x) {y <- c(0, diff(x)); y[is.na(y)] <- 0; (y-runMean(y, cumulative = TRUE))/runSD(y, cumulative = TRUE)  }); aa[is.na(aa)] <- 0
-pca <- prcomp(aa)
-X1 <- (pca$x[,1:30])
-
-stanfit <- rstan::read_stan_csv(fit_m3.0_$output_files());
-plot(stanfit,pars=names(stanfit)[1:25])
-
-rb_ho
-lf_cb
-rb_lf
-lo_lf
-
 

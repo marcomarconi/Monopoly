@@ -886,12 +886,11 @@ print(res$Aggregate %>% unlist)
   print(res$Aggregate %>% unlist)
 }
 
-### Production strategy
+### Production strategy VERY IMPORTANT this is the backtest of the production strategy  
 
 # The backbone will be strategy 11
 {
-  {
-  adjclose <- df$AdjClose; close <- df$Close; risk <- df$Volatility; basis <- df$Basis; expiry_difference <- df$Basis_distance
+  { # functions
   cap_forecast <- function(x, cap=20) {
     return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
   }

@@ -32,14 +32,13 @@ Euro-bobl-cash,hr,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,USD,3,0.028,0
 euro-bund-cash,gg,CMC,NA,NA,Future,Debt,Government,1,1,1,USD,3,0.028,0
 uk-gilt-cash,g,CMC,NA,NA,Future,Debt,Government,1,0.01,0.01,GBP,3,0.02,0
 france-40-cash,mx,CMC,NA,NA,Index,Equity,Europe,1,0.05,0.01,EUR,2,1,0
-norway-25-cash,ow,CMC,NA,NA,Index,Equity,Europe,1,1,1,NOK,2,0.9,0
+norway-25-cash,ow,CMC,NA,NA,Index,Equity,Europe,1,1,0.01,NOK,2,0.9,0
 canada-60-cash,tp,CMC,NA,NA,Index,Equity,America,1,0.5,0.1,CAD,2,0.8,0
 us-spx-500-cash,es,CMC,NA,NA,Index,Equity,America,1,0.01,0.01,USD,2,0.5,0
 australia-200-cash,ap,CMC,NA,NA,Index,Equity,Asia,1,0.05,0.01,AUD,2,5,0
 hong-kong-50-cash,hs,CMC,NA,NA,Index,Equity,Asia,1,0.1,0.1,HKD,1,5,0
 japan-225-cash,ny,CMC,NA,NA,Index,Equity,Asia,1,1,1,JPY,2,7,0
 south-africa-40-cash,lx,CMC,NA,NA,Index,Equity,Africa,1,0.1,0.1,ZAR,1,10,0
-BTC-USD,bt,yahoo,-0.35,0.1,Cash,Equity,Crypto,1,5,1,USD,3,75,0
 cmc-aud-index,aud,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,AUD,2,0.3,0
 cmc-cad-index,cad,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,CAD,2,0.3,0
 cmc-chf-index,chf,CMC,NA,NA,Cash,Currency,Major,1,0.01,0.01,CHF,2,0.3,0

@@ -1,3 +1,5 @@
+## This file contains important procedures to process futures contracts data and create back-adjusted prices
+
 {
   library(tidyverse)
   library(mvtnorm)
@@ -183,9 +185,6 @@ backadjust_spread <- function(df1, df2, N1=1, N2=1, mult=c(1,1), func=backadjust
                     Return1=z$Return.x, Return2=z$Return.y,
                     Nearest=nearest, Backadjusted=backadj))
 }
-
-
-
 
 # Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
 load_cash_contract <- function(f) {
@@ -596,165 +595,9 @@ intramarket_spread <- function(df, N=1, D=1) {
 
 
 
-
-backtest_VIX <- function(df) {
-  zeros <- rep(0, nrow(df))
-  df$Trade <- 0; 
-  df$Entry <- FALSE; 
-  indicator1 <- zeros#df$Nearest - df$VIX
-  indicator2 <- df$VIX#abs(df$Nearest - df$VIX) / df$Maturity
-  filter <-    !zeros #VolatilityRatio(df$Close, 250, sma = TTR::EMA) < 0
-  exit1 <- indicator1
-  exit2 <- indicator2
-  time <- 0
-  last_contract <- ""
-  for(i in 2:nrow(df)){
-    if(is.na(indicator1[i-1]) | is.na(indicator2[i]) | is.na(df$Contract[i])  | is.na(exit1[i]) | is.na(exit2[i])  | is.na(last_contract) | is.na(df$Trade[i]))
-      next
-    df$Trade[i] <- df$Trade[i-1]
-    if(df$Trade[i] != 0)
-      time <- time + 1
-    else 
-      time <- 0
-    # Exit conditions
-    if(df$Trade[i] != 0 & time > 5) {
-        #df$Trade[i] <- 0; 
-    }
-    if(df$Trade[i] != 0 & df$Maturity[i] == 0) {
-      df$Trade[i] <- 0; 
-    }
-
-    # Entry conditions
-    if(df$Trade[i] == 0){
-      if(indicator1[i] >= 0 & indicator2[i] < 30 & last_contract != df$Contract[i]) {
-        df$Trade[i] <- -1; df$Entry[i] <- TRUE;  last_contract <- df$Contract[i] 
-      }
-      if(indicator1[i] <= 0 & indicator2[i] > 30  & last_contract != df$Contract[i]) {
-        df$Trade[i] <- 1; df$Entry[i] <- TRUE; last_contract <- df$Contract[i]
-      }
-    }
-    
-  }
-  df$indicator1 <- indicator1
-  df$indicator2 <- indicator2
-  return(df)
-}
-
-### General Back-test simulation
-backtest <- function(Symbols, strategy, period = 252, daily=TRUE, SL=0, TS=FALSE, start_year=2000, end_year=2023, notrades_exit=TRUE, leverage = 1, plot_stats=FALSE, ...)  {
-  report <- list()
-  equities <- list()  
-  used_symbols <- c()
-  VIX <- read_csv("/home/marco/trading/Historical Data/VIX_History.csv", show_col_types = FALSE) %>% mutate(Date=as.Date(sub(" 00:00", "", Date), format="%Y.%m.%d"))
-  for(s in names(Symbols)){  
-    print(s)
-    df_m <- dplyr::filter(Symbols[[s]] , dplyr::between(lubridate::year(Date), start_year, end_year));
-    if(daily)
-      df_m <-  dplyr::filter(df_m, !(lubridate::wday(lubridate::as_date(Date), label = TRUE) %in% c("Sat", "Sun")))
-    df <- df_m
-    df$Symbol <- s
-    df$Close <- df$Backadjusted
-    df$Entry <- FALSE
-    df$Return[is.na(df$Return)] <- 0
-    df$Position <- 1
-    df$Trade <- NA
-    df$ID <- NA
-    
-    if(strategy=="EMA") {
-      ema <- EMA(df$Close, 16) - EMA(df$Close, 64)
-      df$Trade <- ifelse(ema > 0, 1, 0)
-    } 
-    else if(strategy=="AS") {
-      df$As <- AbsoluteStrength(df$Close, 250)
-      df$Trade <- ifelse(df$As   > 0, 1, ifelse(df$As   < 0, -1, 0))
-    } 
-    else if(strategy=="AS_basis") {
-      as <- AbsoluteStrength(df$Close, 250)
-      basis <- AbsoluteStrength(df$Basis %>% na.locf(na.rm = FALSE), 250) 
-      df$Trade <- ifelse(as > 0 & basis  > 0, 1, ifelse(as < 0 & basis  < 0, -1, 0))
-    } 
-    else if(strategy=="NNFX") {
-      df <- backtest_NNFX(df)
-    } 
-    else if(strategy=="VIX") {
-      vix <- merge(df, VIX, by="Date", all.x=TRUE)
-      df$VIX <- vix$Close.y
-      df <- backtest_VIX(df)
-    } 
-    
-
-
-
-    df$Trade <- dplyr::lag(df$Trade)
-    df$Trade[is.na(df$Trade)] <- 0
-    tradeid <- ifelse(df$Trade > 0, 1, ifelse(df$Trade < 0, -1, 0))
-    df$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
-    df$ID[df$Trade==0] <- NA
-   
-    if(notrades_exit & all(df$Trade==0)) {
-      print(paste("No trades for symbol: ", s))
-      return(NA)
-    }
-    
-    df$Position <- dplyr::lag(df$Position)
-    df$Position[is.na(df$Position)] <- 0
-    df$PnL <-  (df$Return*df$Trade*df$Position) 
-    df$PnL[is.na(df$PnL)] <- 0
-    equities[[s]] <- df
-    report[[s]] <- get_trades_statistics(df$PnL, df$Trade, df$ID, period = period)
-    for(x in 1:length(report[[s]]))
-      if(is.nan(report[[s]][[x]]))
-        report[[s]][[x]] <- 0
-    used_symbols <- c(used_symbols, s)
-  }
-  # Statistics
-  {
-    # Print some stats
-    report <- report %>% do.call(rbind,.) %>% apply(.,2,unlist) %>% as.data.frame()
-    fit <- summary(glm(sharpe_ratio ~ 1, data = report, family = "gaussian"))
-    print(paste("Assets Sharpe Ratios mean estimation: ", round(fit$coefficients[1],2), "+-", round(fit$coefficients[2],2)))
-    # Merge all symbols results
-    full_df <- Reduce(function(...) full_join(..., by="Date", all=TRUE, incomparables = NA), equities) %>% arrange(Date)
-    # Portfolio is the PnL
-    portfolio <- full_df[,grep("Date|PnL", colnames(full_df))] 
-    colnames(portfolio) <- c("Date", used_symbols)
-    portfolio[is.na(portfolio)] <- 0
-    # Returns are original returns
-    returns <- full_df[,grep("Date|Return", colnames(full_df))]
-    colnames(returns) <- c("Date", used_symbols)
-    returns[is.na(returns)] <- 0
-    # Trades are simply -1/0/1
-    trades <- full_df[,grep("Date|Trade", colnames(full_df))]
-    colnames(trades) <- c("Date", used_symbols)
-    trades[is.na(trades)] <- 0
-    # Here I simply rescale each symbol's return by its total SD
-    portfolio_weights <- get_portofolio_weights(returns[,-1], SD=TRUE, CORR = FALSE, HRP = FALSE) # 
-    #portfolio_weights <- matrix(1/ncol(portfolio[,-1]), nrow=nrow(portfolio), ncol=ncol(portfolio)-1)
-    portfolio[,2:ncol(portfolio)] <- (as.matrix(portfolio[,-1]) * portfolio_weights)
-    # Print some statistics
-    ret_stats <- get_returns_statistics(portfolio[,-1] * leverage, period = period, dates=portfolio[,1], plot=plot_stats)
-    print(ret_stats %>% data.frame(check.names = F))
-    print(paste("Total Number of Trades: ", sum(report$total_trades)))
-    print(paste("Symbols average Won Trades (%): ", round(report$`win_trades_%` %>% mean,2), "+-", round(sd(report$`win_trades_%`) / sqrt(length(used_symbols)), 3)))
-    print(paste("Symbols average Trade Return (%): ", round(report$`avg_trade_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_return_%`) / sqrt(length(used_symbols)),3)))
-    print(paste("Symbols average Trade Win Return (%): ", round(report$`avg_trade_win_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_win_return_%`) / sqrt(length(used_symbols)),3)))
-    print(paste("Symbols average Trade Lost Return (%): ", round(report$`avg_trade_lost_return_%` %>% mean,3), "+-", round(sd(report$`avg_trade_lost_return_%`) / sqrt(length(used_symbols)),3)))
-  }
-  return(list(stats=ret_stats, report=report, equities=equities, portfolio=portfolio))
-}
-
 ## Seasonality-based trades
 {
-# Oils
-df <- BackAdj[c("CB", "CL", "RB", "HO")] %>% do.call(rbind, .) %>% filter(year(Date) > 2000)
-a <- mutate(df, dom=wday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
-  mutate(Cost = case_when(Symbol == "CB" ~ 0.0005, Symbol == "CL" ~ 0.0005, Symbol == "RB" ~ 0.003, Symbol == "HO" ~ 0.003, TRUE ~ 0)) %>% 
-  mutate(Trade = case_when(dom <= 3 & Basis < 0 ~ -1, dom > 3 & Basis > 0 ~ 1, TRUE ~ 0)) %>% 
-  mutate(Excess = ifelse(is.na(Return), 0, Return*Trade)) %>% 
-  group_by(date, Symbol) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(length(rle(Trade[Trade!=0]))), Cost=first(Cost*Trades)) %>% group_by(Symbol) %>% 
-  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
-ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) #+ scale_color_viridis(discrete = TRUE)
-a %>% summarise(mean(Excess)/sd(Excess)*sqrt(52))
+
 # Bonds
 df <- BackAdj[c("ZN", "ZN", "ZF", "ZT", "UD", "ZB")] %>% do.call(rbind, .) %>% filter(year(Date) > 2000)
 a <-  mutate(df, dom=mday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
@@ -783,46 +626,4 @@ a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>%
   summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
 ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
 with(a, mean(Excess)/sd(Excess)*sqrt(52))
-}
-
-# Random stuff
-res <- backtest(BackAdj, strategy = "AS")
-{
-z <- do.call(rbind, res$equities)
-z <- res$equities$HN  
-z$As <- z$As/z$Close
-# tradeid <- ifelse(z$Trade > 0, 1, ifelse(z$Trade < 0, -1, 0))
-# z$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
-# z$ID[z$Trade==0] <- NA
-# z_trade <-  group_by(z, ID) %>% summarise(ExcessTrade = sum(PnL), Win=factor(ifelse(ExcessTrade > 0, 1, 0)), Length=n())
-# table(z_trade$Win)
-# group_by(z_trade, Win) %>% summarise(median(Length))
-z_week <- group_by(z, Date=yearweek(Date), Symbol=Symbol) %>% summarise(PnL=mean(PnL), As = first(As))
-with(z_week, plot(log(abs(As))  , PnL))
-}
-z$Volatility <- sqrt(EMA(z$Return^2, 30))
-zz <- group_by(z, ID) %>%  summarise(x=1:n(), y=abs(As),  Win=factor(ifelse(sum(PnL) > 0, 1, 0))) %>% group_by(x, Win) %>% summarise(y=mean(y, na.rm=TRUE))
-ggplot(zz) + geom_line(aes(x=x, y=y)) + facet_wrap(~Win) + theme(legend.position = "None")
-}
-
-{
-  z <- res$equities$RS
-  z <- df
-  zz <- group_by(z, ID) %>%  summarise(x=1:n(), y=abs(As),  Win=factor(ifelse(sum(Excess) > 0, 1, 0))) %>% group_by(x, Win) %>% summarise(y=mean(y, na.rm=TRUE))
-  ggplot(zz) + geom_line(aes(x=x, y=y)) + facet_wrap(~Win) + theme(legend.position = "None")
-}
-
-
-{
-b <- rnorm(1000000, 0, 0.001) %>% cumsum %>% exp
-df <- data.frame(Close=b, Return=c(0, diff(log(b))), As=AbsoluteStrength(b, 250))
-df$Trade <- lag(ifelse(df$As > 0, 1, -1))
-df$Trade[is.na(df$Trade)] <- 0
-df$Excess <- df$Trade * df$Return
-tradeid <- ifelse(df$Trade > 0, 1, ifelse(df$Trade < 0, -1, 0))
-df$ID <- rep(1:length(rle(tradeid)$length), times=rle(tradeid)$length)
-df$ID[df$Trade==0] <- NA
-df <- na.omit(df)
-df_trade <-  group_by(df, ID) %>% summarise(ExcessTrade = sum(Excess), Win=ifelse(ExcessTrade > 0, 1, 0), Length=n())
-table(df_trade$Win)
 }
