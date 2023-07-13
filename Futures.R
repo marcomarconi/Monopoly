@@ -8,6 +8,7 @@
   library(mvtnorm)
   library(reshape2)
   library(tsibble)
+  library(data.table)
   source("/home/marco/trading/Systems//Common/Common.R")
   setwd("/home/marco/trading/Systems/Monopoly/")
   Sys.setlocale("LC_TIME", "en_US.UTF-8")
@@ -70,7 +71,7 @@ load_future_contracts <- function(symbol, dir, order_years=c(80:99,0:30), order_
   files <- list()
   # load all the contracts, adding an infinite before and after each contract (so you can recognize start and end)
   for(l in list.files(dir, pattern = ".csv")) {
-    f <- read_csv(paste0(dir, "/", l), show_col_types = FALSE) %>% select(Time, Last) %>% rename(Date=Time)
+    f <- fread(paste0(dir, "/", l)) %>% select(Time, Last) %>% rename(Date=Time)
     f$Date <- as.Date(f$Date, format="%m/%d/%Y") 
     f <- arrange(f, Date)
     f <- rbind(data.frame(Date=f$Date[1]-1, Last=NaN), f, data.frame(Date=f$Date[length(f$Date)]+1, Last=NaN))
@@ -79,6 +80,7 @@ load_future_contracts <- function(symbol, dir, order_years=c(80:99,0:30), order_
   # Join all the contracts and sort them by Date and contracts order
   df <- Reduce(function(...) full_join(..., by="Date", all=T), files) %>% arrange(Date)
   colnames(df) <- c("Date", names(files))
+  df <- as.data.frame(df)
   #order <- scan(paste0(dir, "/", order_file), what="string") %>% tolower()
   order <- colnames(df)[-1][na.omit(match(order_comb, colnames(df)[-1]))]
   df <- df[,c("Date", order)] %>% arrange(Date)
@@ -281,9 +283,12 @@ intramarket_spread <- function(df, N=1, D=1) {
     dir <- as.character(to_load[i,2])
     Futures[[symbol]] <- load_future_contracts(symbol, dir)
   }
+  write_rds(Futures, "/home/marco/trading/Historical Data/Barchart/Futures.RDS")
   # Backadjust the prices
   BackAdj <- list()
   for(symbol in names(Futures)) {
+    if(!is.null(BackAdj[[symbol]]))
+      next
     print(symbol)
     BackAdj[[symbol]] <- backadjust_future(Futures[[symbol]], N=2)
     BackAdj[[symbol]]$Symbol <- symbol

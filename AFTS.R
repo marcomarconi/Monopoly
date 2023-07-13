@@ -116,7 +116,7 @@ portfolio_summary <- function(portfolio, dates = NULL, period = 252, benchmark.d
   }
   symbol_result <- NULL
   if (symbol_wise) {
-    symbol_result <- apply(portfolio, 2, function(x) unlist(strategy_performance(x, dates = dates))) %>% t()
+    symbol_result <- apply(portfolio, 2, function(x) unlist(strategy_performance(x, dates = dates))) %>% t() %>% as.data.frame
   }
   return(list(Aggregate = results, Symbols = symbol_result))
 }
@@ -1044,6 +1044,9 @@ print(res$Aggregate %>% unlist)
     CMC_selection <- c("ZN","GG","CC","KC","HG","ZC","CT","CL","IM","GC","HE","LE","LS","NG","ZO","OJ","ZR","ZS","ES","SB","DX","ZW","D6")
     Assets <- BackAdj# or BackAdj[CMC_selection]
     results <- list()
+    exposures <- list()
+    returns <- list()
+    vols <- list()
     target_vol <- 0.25
     IDM = 2.5
     FDMtrend <- 1.33
@@ -1052,9 +1055,11 @@ print(res$Aggregate %>% unlist)
     FDMskew <- 1.18
     FDMkurtosis <- 1.18
     # Trend, Carry, CSM, Skew, Kurtosis
-    weights <- list("Trend"=1, "Carry"=0, "CSM"=0, "Skew"=0, "Test"=0)
+    weights <- list("Trend"=0.5, "Carry"=0.5, "CSM"=0, "Skew"=0, "Test"=0)
     # Apply relative volatility
     relative_vol <- FALSE
+    # Symbol-wise results
+    symbol_wise <- FALSE
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1086,9 +1091,11 @@ print(res$Aggregate %>% unlist)
         df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
         df$M <- EMA(2 - 1.5 * df$Q, 10)
       }
+      
       # Correlation with market
       df <- merge(df, select(BackAdj$ES, Date, AdjClose) %>% mutate(ES=AdjClose) %>% select(-AdjClose), by="Date") 
-      df$Cor <- 0#multiple_cor(df$AdjClose, df$ES) 
+      df$Cor <- multiple_cor(df$AdjClose, df$ES) 
+      
       # Trend-following (strategy 9)
       if(weights[["Trend"]]  > 0) {
         df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
@@ -1117,7 +1124,6 @@ print(res$Aggregate %>% unlist)
       }
       
       
-      
       # # Kurtosis
       # if(weights[["Test"]]  > 0) {
       #   df$ForecastTest <- returns_kurtosis(df$Return) * FDMkurtosis
@@ -1137,19 +1143,34 @@ print(res$Aggregate %>% unlist)
       # }
       
       # Final trade
-      df$Trade <- (  weights[["Trend"]] * df$ForecastTrend + 
+      df$Forecast <- (  weights[["Trend"]] * df$ForecastTrend + 
                      weights[["Carry"]] * df$ForecastCarry + 
                      weights[["CSM"]] * df$ForecastCSM + 
                      weights[["Skew"]] * df$ForecastSkew + 
                      weights[["Test"]] * df$ForecastTest) / 10 
-      df$Trade <- lag(df$Trade)
-      df$Excess <- df$Return * df$Position * df$Trade * IDM 
+      df$Forecast <- lag(df$Forecast)
+      df$Excess <- df$Return * df$Position * df$Forecast * IDM 
+      exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast/10) %>% select(Date, Exposure) 
+      returns[[symbol]]  <-  select(df, Date, Return)
+      vols[[symbol]]  <-  select(df, Date, Volatility)
       results[[symbol]] <- select(df, Date, Excess)
     }
     print("")
     portfolio <- merge_portfolio_list(results)
-    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = TRUE  ) 
+    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = symbol_wise  ) 
     print(res$Aggregate %>% unlist)
+    if(symbol_wise) {
+      res$Symbols$Class <- lapply(Assets, function(x) x$Class[1]) %>% unlist
+      group_by(res$Symbols, Class) %>% summarise(SR_mean=mean(`Sharpe ratio`), SR_sd=sd(`Sharpe ratio`))
+    }
+    ## Some figures takes from the Risk Management section
+    # Figure 97: Portfolio volatility, check it is in line with target volatility
+    # full_df_exposures <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), exposures) %>% arrange(Date)
+    # full_df_returns <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), returns) %>% arrange(Date)
+    # full_df_vols<- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), vols) %>% arrange(Date)
+    # a <- sapply(181:nrow(full_df_returns),  function(i) { w <- as.numeric(full_df_exposures[i,-1]); w[is.na(w)] <- 0; S <-  cov(full_df_returns[(i-180):i,-1], use="pairwise.complete.obs"); S[is.na(S)] <- 0; sqrt( w %*% S %*% w  )  } )
+    # plot.ts(a*100); abline(h=target_vol*100)
+    # a <- rowSums(abs(full_df_exposures[,-1] * full_df_vols[,-1]), na.rm=T)
   }
   
 }

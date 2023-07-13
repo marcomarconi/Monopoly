@@ -389,7 +389,7 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
@@ -427,13 +427,13 @@ if(capital <= 0 | is.na(capital))
   closes <- lapply(instruments_data, function(x)x[[1]])
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
-  returns_merged <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
-  vols <- data.frame(Date=returns_merged$Date, apply(returns_merged[,-1], 2, function(x) calculate_volatility(x))) 
-  cor_matrix <- cor(tail(returns_merged[,-1], corr_days), use="pairwise.complete.obs")
+  daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
+  weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
+  vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
+  cor_matrix <- cor(tail(weekly_returns[,-1], corr_days), use="pairwise.complete.obs")
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
-  
 
   # iterate over data and calculate positions
   print("Calculate new positions...")
@@ -551,6 +551,20 @@ if(capital <= 0 | is.na(capital))
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, MinPosition, TickSize))  
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
+  # Portfolio volatility
+  w <- with(today_trading, Position * ContractSize * Close / FX / capital) %>% as.numeric
+  portfolio_volatility <- round(sqrt(w %*% cov_matrix %*% w) * 100, 2)
+  print(paste("Portfolio volatility:", portfolio_volatility, "%"))
+  # Portfolio jump risk
+  jump <- lapply(results, function(x) quantile(x$Volatility, probs=0.99)) %>% unlist
+  jump_cov_matrix <- diag(jump) %*% cor_matrix %*% diag(jump)
+  jump_risk <- round(sqrt(w %*% jump_cov_matrix %*% w) * 100, 2)
+  print(paste("Portfolio jump risk:", jump_risk, "%"))
+  # Portfolio correlation risk
+  risks <- lapply(1:length(results), function(i) w[i] * tail(results[[i]]$Volatility, 1)) %>% unlist
+  correlation_shock_portfolio <- round(sum(abs(risks)), 2) * 100
+  print(paste("Portfolio correlation risk:", correlation_shock_portfolio, "%"))
+  # Active positions
   print(paste("Active positions:", sum(today_trading$Position != 0), "total symbols:", nrow(today_trading)))
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast)
