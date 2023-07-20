@@ -603,14 +603,6 @@ intramarket_spread <- function(df, N=1, D=1) {
 ## Seasonality-based trades
 {
 
-# Bonds
-df <- BackAdj[c("ZN", "ZN", "ZF", "ZT", "UD", "ZB")] %>% do.call(rbind, .) %>% filter(year(Date) > 2000)
-a <-  mutate(df, dom=mday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
-  mutate(df, Trade = case_when(dom >= 25  ~ 1, dom <= 5 ~ -1, TRUE ~ 0), Cost=0) %>% 
-  mutate(Excess = ifelse(is.na(Return), 0, Return*Trade)) %>% 
-  group_by(date, Symbol) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(length(rle(Trade[Trade!=0]))), Cost=first(Cost*Trades)) %>% group_by(Symbol) %>% 
-  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
-ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) + scale_color_viridis(discrete = TRUE)
 # Lumber
 df <- BackAdj[["LS"]] %>% filter(year(Date) > 2000)
 a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>% 

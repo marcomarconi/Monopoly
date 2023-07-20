@@ -14,6 +14,7 @@
 
 
 Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
+BackAdj <- read_rds("/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
 target_vol <- 0.2
 
 strategy_performance <- function(returns, dates = NULL, period = 252) {
@@ -942,14 +943,14 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, EMAs))
     return(forecast)
   }
-  multiple_cor <- function(adjclose.x, adjclose.y, spans=c(20, 60, 120, 250)) {
+  multiple_cor <- function(return.x, return.y, spans=c(20, 60, 120, 250)) {
     n <- length(spans)
-    COR <- lapply(1:n, function(i) runCor(df$AdjClose, df$ES, n = spans[i]) %>% na.locf(., na.rm=FALSE))
+    COR <- lapply(1:n, function(i) runCor(return.x, return.y, n = spans[i]) %>% na.locf(., na.rm=FALSE))
     forecast <- rowMeans(do.call(cbind, COR))
     return(forecast)
   }
   relative_volatility <- function(volatility, period=2520) {
-    return(rollapply(na.locf(volatility, fromLast = TRUE), width=2520, FUN=mean, partial=TRUE, fill=NA,align="right"))
+    return(rollapply(na.locf(volatility, fromLast = TRUE), width=period, FUN=mean, partial=TRUE, fill=NA,align="right"))
   }
   normalize_price <- function(adjclose, close, volatility, period=252) {
     np <- rep(NA, length(close))
@@ -1054,14 +1055,16 @@ print(res$Aggregate %>% unlist)
     FDMcsm <- 1.4
     FDMskew <- 1.18
     FDMkurtosis <- 1.18
-    # Trend, Carry, CSM, Skew, Kurtosis
-    weights <- list("Trend"=0.5, "Carry"=0.5, "CSM"=0, "Skew"=0, "Test"=0)
     # Apply relative volatility
     relative_vol <- FALSE
-    # Symbol-wise results
-    symbol_wise <- FALSE
+    # Apply Marker Correlation
+    market_cor <- TRUE
+    # Trend, Carry, CSM, Skew, Test
+    weights <- list("Trend"=0, "Carry"=0, "CSM"=0, "Skew"=1, "Test"=0)
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
+    # Symbol-wise results
+    symbol_wise <- TRUE
     # Asset class indices
     if(weights[["CSM"]] > 0) {
       NPs <- list()
@@ -1093,8 +1096,12 @@ print(res$Aggregate %>% unlist)
       }
       
       # Correlation with market
-      df <- merge(df, select(BackAdj$ES, Date, AdjClose) %>% mutate(ES=AdjClose) %>% select(-AdjClose), by="Date") 
-      df$Cor <- multiple_cor(df$AdjClose, df$ES) 
+      df$Cor <- 1
+      if(market_cor) {
+        df <- merge(df, select(BackAdj$ES, Date, Return) %>% mutate(ES=Return) %>% select(-Return), by="Date") 
+        df$Cor <- multiple_cor(df$Return %>% na.locf(na.rm=F), df$ES %>% na.locf(na.rm=F))
+        df$Cor <- -df$Cor + 1 
+      }
       
       # Trend-following (strategy 9)
       if(weights[["Trend"]]  > 0) {
@@ -1102,12 +1109,12 @@ print(res$Aggregate %>% unlist)
         df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
-        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M * (-df$Cor+1.0)
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M * df$Cor
         df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
       }
       # Carry (strategy 10)
       if(weights[["Carry"]]  > 0) {
-        df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry  * (-df$Cor+1.0)
+        df$ForecastCarry <- multiple_Carry(df$Basis, df$Basis_distance, df$Volatility)  * FDMcarry 
         df$ForecastCarry <- cap_forecast(df$ForecastCarry)
       }
       # Cross-sectional momentum (strategy 19)
@@ -1119,16 +1126,18 @@ print(res$Aggregate %>% unlist)
       }
       # Skewness (strategy 24)
       if(weights[["Skew"]]  > 0) {
-        df$ForecastSkew <- returns_skew(df$Return) * FDMskew  * (-df$Cor+1.0)
+        df$ForecastSkew <- returns_skew(df$Return) * FDMskew  
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
       
       # # Kurtosis
-      # if(weights[["Test"]]  > 0) {
-      #   df$ForecastTest <- returns_kurtosis(df$Return) * FDMkurtosis
-      #   df$ForecastTest <- cap_forecast(df$ForecastTest)
-      # }
+      if(weights[["Test"]]  > 0) {
+        #df$ForecastTest <- returns_kurtosis(df$Return) * FDMkurtosis
+        #forecast <- rollapply(df$Return, width=20, kurt,  fill=NA, align="right")  
+        df$ForecastTest <- sign(multiple_EMA(df$AdjClose, df$Close, df$Volatility) )# * forecast
+        df$ForecastTest <- cap_forecast(df$ForecastTest)
+      }
       # Acceleration
       # if(weights[["Test"]]  > 0) {
       #   df$Forecast16 <- (EMA(df$AdjClose, 16) -  EMA(df$AdjClose, 64)) / (df$Close * df$Volatility / 16) * 4.1
@@ -1143,14 +1152,14 @@ print(res$Aggregate %>% unlist)
       # }
       
       # Final trade
-      df$Forecast <- (  weights[["Trend"]] * df$ForecastTrend + 
-                     weights[["Carry"]] * df$ForecastCarry + 
-                     weights[["CSM"]] * df$ForecastCSM + 
-                     weights[["Skew"]] * df$ForecastSkew + 
-                     weights[["Test"]] * df$ForecastTest) / 10 
+      df$Forecast <- ( weights[["Trend"]] * df$ForecastTrend + 
+                       weights[["Carry"]] * df$ForecastCarry + 
+                       weights[["CSM"]] * df$ForecastCSM + 
+                       weights[["Skew"]] * df$ForecastSkew + 
+                       weights[["Test"]] * df$ForecastTest) / 10 
       df$Forecast <- lag(df$Forecast)
       df$Excess <- df$Return * df$Position * df$Forecast * IDM 
-      exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast/10) %>% select(Date, Exposure) 
+      exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast) %>% select(Date, Exposure) 
       returns[[symbol]]  <-  select(df, Date, Return)
       vols[[symbol]]  <-  select(df, Date, Volatility)
       results[[symbol]] <- select(df, Date, Excess)

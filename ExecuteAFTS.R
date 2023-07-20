@@ -27,34 +27,49 @@
   # weekly data is leaded 2 days
   load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
     symbol_dir <- paste0(dir, "/", symbol)
-    # load daily data, lag date by one day
-    files <- list()
-    for (l in list.files(symbol_dir, pattern = "daily")) {
-      #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-      f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
-      colnames(f) <- c("Date", "Close")
-      if(lagged) 
-        f <- f %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
-      files[[l]] <- f
-    }
-    # merge into one continous time series, remove possible dubplicates by keeping the last one
-    df_daily = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
+    # # load daily data, lag date by one day
+    # files <- list()
+    # for (l in list.files(symbol_dir, pattern = "daily")) {
+    #   #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
+    #   f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
+    #   colnames(f) <- c("Date", "Close")
+    #   if(lagged) 
+    #     f <- f %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
+    #   files[[l]] <- f
+    # }
+    # # merge into one continous time series, remove possible dubplicates by keeping the last one
+    # df_daily = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
+    system(paste("cat", paste(list.files(symbol_dir, pattern = "daily", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
+    df_daily <- fread("_tmp", header= FALSE)
+    colnames(df_daily) <- c("Date", "Close")
+    df_daily <- arrange(df_daily, Date)
+    if(lagged) 
+      df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
     # load weekly data, lag date by two days
-    files <- list()
-    for (l in list.files(symbol_dir, pattern = "weekly")) {
-      #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-      f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
-      colnames(f) <- c("Date", "Close")
-      if(lagged) {
-        f[,1] <- f[,1]+2
-        f <- f[-1,]
-      }
-      files[[l]] <- f
+    # files <- list()
+    # for (l in list.files(symbol_dir, pattern = "weekly")) {
+    #   #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
+    #   f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
+    #   colnames(f) <- c("Date", "Close")
+    #   if(lagged) {
+    #     f[,1] <- f[,1]+2
+    #     f <- f[-1,]
+    #   }
+    #   files[[l]] <- f
+    # }
+    # # merge into one continous time series, remove possible dubplicates by keeping the last one
+    # df_weekly = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
+    # 
+    system(paste("cat", paste(list.files(symbol_dir, pattern = "weekly", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
+    df_weekly <- fread("_tmp", header= FALSE)
+    colnames(df_weekly) <- c("Date", "Close")
+    df_weekly <- arrange(df_weekly, Date)
+    if(lagged) {
+      df_weekly[,1] <- df_weekly[,1]+2
+      df_weekly <- df_weekly[-1,]
     }
-    # merge into one continous time series, remove possible dubplicates by keeping the last one
-    df_weekly = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
     # only keep weekly data up to the start of daily data
-    df_weekly <- dplyr::filter(df_weekly, Date < df_daily$Date[7])
+    df_weekly <- mutate(df_weekly, Date=as.Date(Date)) %>% dplyr::filter(Date < df_daily$Date[7])
     # interpolate weekly data to create daily data
     # first, recreate full daily Date excluding weekends
     dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% 
@@ -193,8 +208,8 @@
     return(forecast)
   }
   
-  round_position <- function(position, min_position, ticksize) {
-    return(ifelse(abs(position) < min_position,  0, round(position, sapply(ticksize, decimalplaces ))))
+  round_position <- function(position, min_position, position_tick) {
+    return(ifelse(abs(position) < min_position,  0, round(position, sapply(position_tick, decimalplaces ))))
   }
   
 
@@ -319,7 +334,7 @@
 }
 
 
-# Parameters (maybe pu them in a config file?)
+# Parameters (maybe put them in a config file?)
 {
   main_dir <- "/home/marco/trading/Systems/Monopoly/Execution/"
   positions_file <- paste0(main_dir, "POSITIONS.csv")
@@ -336,9 +351,9 @@
   FDMcarry <- 3.3
   FDMskew <- 1.1
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
-  corr_days <- 120
+  corr_length <- 60
   portfolio_buffering_level <- 0.1
-  position_buffering_level <- 0.1
+  position_buffering_level <- 0.2
   trade_shadow_cost <- 0
 }
 
@@ -389,7 +404,7 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  #system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
@@ -428,9 +443,9 @@ if(capital <= 0 | is.na(capital))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
   daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
-  weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
+  #weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
-  cor_matrix <- cor(tail(weekly_returns[,-1], corr_days), use="pairwise.complete.obs")
+  cor_matrix <- cor(tail(daily_returns[,-1], corr_length), use="pairwise.complete.obs")
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
@@ -455,8 +470,8 @@ if(capital <= 0 | is.na(capital))
     df$Weight <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Weight)
     df$Product <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Product)
     df$ContractSize <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(ContractSize)
-    df$MinPosition <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(MinPosition)
-    df$TickSize <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(TickSize)
+    df$PositionMin <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(PositionMin)
+    df$PositionTick <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(PositionTick)
     df$Decimals <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Decimals)
     df$Spread <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Spread)
     df$Commission <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Commission)
@@ -505,7 +520,7 @@ if(capital <= 0 | is.na(capital))
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
     df$PositionOptimal <-  (df$Exposure * df$FX * df$Forecast/10) /
       (df$ContractSize * df$Close  ) 
-    df$PositionMax <- (df$Exposure * df$FX * 2) /
+    df$PositionMax <- (df$Exposure * df$FX * 20/10) /
       (df$ContractSize * df$Close  ) 
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
@@ -522,14 +537,14 @@ if(capital <= 0 | is.na(capital))
   # Dynamic portfolio
   optimal_positions <- with(today_trading, PositionOptimal)
   max_positions <- with(today_trading, PositionMax)
-  min_positions <- with(today_trading, MinPosition)
+  min_positions <- with(today_trading, PositionMin)
   notional_exposures <- with(today_trading, ContractSize * Close / FX)
   costs_per_contract <- with(today_trading, ContractSize * (Spread/2) / FX)
   previous_position <- previous_trading$Position
   position_dynamic <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix, 
                                         previous_position = previous_position, max_positions = max_positions, min_positions = min_positions,
                                         costs_per_contract=costs_per_contract, trade_shadow_cost = trade_shadow_cost)
-  position_optimized <- round_position(position_dynamic, today_trading$MinPosition,  today_trading$TickSize) 
+  position_optimized <- round_position(position_dynamic, today_trading$PositionMin,  today_trading$PositionTick) 
   # Buffering
   res <- buffering_portfolio(capital, position_optimized, previous_position, notional_exposures, cov_matrix, portfolio_buffering_level, target_vol)
   required_trades <- res[[1]]
@@ -546,10 +561,10 @@ if(capital <= 0 | is.na(capital))
   # we trade straight to the optimized position. Otherwise some positions never take place (like when the minimum position is very high) 
   today_trading$RequiredTrade <- required_trades
   today_trading$RequiredTrade <- with(today_trading, ifelse(abs(RequiredTrade) > 0 & PositionPrevious == 0, PositionOptimized, RequiredTrade))
-  # trade only if the required trade if bigger than buffer, bigger than tick size and bigger than minumum position
-  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer & abs(RequiredTrade) > TickSize & abs(RequiredTrade) > MinPosition)
+  # trade only if the required trade if bigger than buffer, bigger than position tick size and bigger than minumum position
+  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer & abs(RequiredTrade) > PositionTick & abs(RequiredTrade) > PositionMin)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
-  today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, MinPosition, TickSize))  
+  today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, PositionMin, PositionTick))  
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   # Portfolio volatility
   w <- with(today_trading, Position * ContractSize * Close / FX / capital) %>% as.numeric

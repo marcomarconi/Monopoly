@@ -1,4 +1,4 @@
-URL,Symbol,Platform,Buy,Sell,Product,Class1,Class2,ContractSize,MinPosition,TickSize,FX,Decimals,Spread,Commission
+URL,Symbol,Platform,Buy,Sell,Product,Class1,Class2,ContractSize,PositionMin,PositionTick,FX,Decimals,Spread,Commission
 soybean-cash,zs,CMC,NA,NA,Future,Agriculture,Grain,0.01,50,1,USD,2,1.5,0
 soybean-oil-cash,zl,CMC,NA,NA,Future,Agriculture,Grain,0.01,2000,1,USD,3,0.09,0
 soybean-meal-cash,zm,CMC,NA,NA,Future,Agriculture,Grain,1,1,1,USD,2,0.7,0
