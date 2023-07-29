@@ -123,7 +123,7 @@ backadjust_future <- function(df, N=1, period=365) {
   for(i in 3:(nrow(m)-1)) { # this assume first and last entries are Inf
     ret[i] <- log(m[i,j] / m[i-1,j])
     difference[i] <- m[i,j] - m[i-1,j]  
-    if(j < ncol(m) && i >= ec[j]-N+2) { # we have not reached the last contract and we habe not rearched the last holding day
+    if(j < ncol(m) && i >= ec[j]-N+2) { # we have not reached the last contract and we have not reached the last holding day
       j <- j + 1;
       rollover[i] <- TRUE
       ret[i] <- log(m[i,j] / m[i-1,j])
@@ -135,11 +135,10 @@ backadjust_future <- function(df, N=1, period=365) {
     maturity[i] <- ec[j] - i
     if(j < ncol(m)) {
       k <- ifelse(j+1 > ncol(m), ncol(m), j+1 )
-      #ratio <- m[i,j] / m[i,k])
       basis[i] <- log(m[i,j]) - log(m[i,k]) # simple log difference between contracts
       basis_price[i] <- m[i,j] - m[i,k] # simple price difference between contracts
       basis_distance[i] <- ym[k] - ym[j] # distance in months
-      #basis[i] <- period * (ratio - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
+      basis_gordon[i] <- period * (m[i,j] / m[i,k]) - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
       #spot[i] <-  m[i,j] * (1 + basis[i] / period * (ec[j]-i)) # as defined in Gorton et al. 2013
     }
     if(!(is.na(m[i,j]) | is.nan(m[i,j]))) {
@@ -154,7 +153,7 @@ backadjust_future <- function(df, N=1, period=365) {
   final <- data.frame(
     Date=df[,1], Close=close, AdjClose=adjclose, Return=ret, Difference=difference, Adjs=adjclose-close, 
     Contract=contract, Rollover=rollover, Maturity=maturity,
-    Basis=basis, Basis_price=basis_price, Basis_distance=basis_distance, Spot=spot )
+    Basis=basis, Basis_price=basis_price, Basis_gordon=basis_gordon, Basis_distance=basis_distance, Spot=spot )
   delete <- c()
   for(i in 1:nrow(m)) # if a row wall all NAs (probably because it just stored a Nan) in the original data, remove it from the final result
     if(all(is.na(m[i,])))
@@ -272,7 +271,7 @@ intramarket_spread <- function(df, N=1, D=1) {
 {
   stop()
   setwd( "/home/marco/trading/Historical Data/Barchart/")
-  to_load <- read_csv("list.csv")
+  to_load <- read_csv("Instrument_List.csv")
   # load the full futures contracts
   Futures <- list()
   for(i in 1:nrow(to_load) ){

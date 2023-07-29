@@ -23,6 +23,25 @@
       return(0)
     }
   }
+  
+  round_position <- function(position, min_position, position_tick) {
+    return(ifelse(abs(position) < min_position,  0, round(position, sapply(position_tick, decimalplaces ))))
+  }
+  
+  runCorMatrix <- function(M, n=25) {
+    run_corr_matrices <- lapply(n:nrow(M), function(i) cor(M[(i-n):i,], use="pairwise.complete.obs"))
+    run_corr_vectors <- lapply(run_corr_matrices, as.vector) 
+    corr_by_date <- do.call(cbind, run_corr_vectors)
+    ema_corr_by_date <- apply(corr_by_date, 1, EMA, n) %>% t 
+    Q <- lapply(1:ncol(ema_corr_by_date), 
+                function(i) matrix(ema_corr_by_date[,i], ncol=ncol(M), dimnames = list(colnames(M), colnames(M))))
+    return(Q)
+  }
+
+
+
+  
+  
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
   load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
@@ -208,9 +227,7 @@
     return(forecast)
   }
   
-  round_position <- function(position, min_position, position_tick) {
-    return(ifelse(abs(position) < min_position,  0, round(position, sapply(position_tick, decimalplaces ))))
-  }
+
   
 
   ## Greedy algorithm to find a set of positions closest to the optimal provided. Adapted from "Advanced futures trading strategies (2022)".
@@ -345,13 +362,14 @@
   logs_dir <- paste0(main_dir, "Logs/")
   logs_instruments_dir <- paste0(logs_dir, "Instruments/")
   scrape_script <- "SCRAPE_DATA.sh"
-  target_vol <- 0.50
+  target_vol <- 0.33
   IDM = 2.5
   FDMtrend <- 1.3
   FDMcarry <- 3.3
-  FDMskew <- 1.1
+  FDMskew <- 1.2
+  FDM <- 1.5
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
-  corr_length <- 60
+  corr_length <- 25
   portfolio_buffering_level <- 0.1
   position_buffering_level <- 0.2
   trade_shadow_cost <- 0
@@ -373,7 +391,7 @@ if(capital <= 0 | is.na(capital))
 
 
 {
-  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Buffering level:", portfolio_buffering_level))
+  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Portfolio Buffering Level:", portfolio_buffering_level, "Position Buffering Level:", position_buffering_level))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
@@ -443,9 +461,10 @@ if(capital <= 0 | is.na(capital))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
   daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
-  #weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
+  weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
-  cor_matrix <- cor(tail(daily_returns[,-1], corr_length), use="pairwise.complete.obs")
+  #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs")
+  cor_matrix <- runCorMatrix(as.matrix(weekly_returns[,-1]))[[ncol(weekly_returns[,-1])]]
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
@@ -514,7 +533,7 @@ if(capital <= 0 | is.na(capital))
     df$Forecast <- (
         strategy_weights$Trend * df$ForecastTrend + 
         strategy_weights$Carry * df$ForecastCarry + 
-        strategy_weights$Skew  * df$ForecastSkew   ) 
+        strategy_weights$Skew  * df$ForecastSkew   ) * FDM
     df$Forecast <- cap_forecast(df$Forecast)
     df$InstCapital <- capital * df$Weight * IDM 
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
