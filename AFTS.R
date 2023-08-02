@@ -928,6 +928,7 @@ print(res$Aggregate %>% unlist)
     CMC_selection <- c("ZN","GG","CC","KC","HG","ZC","CT","CL","IM","GC","HE","LE","LS","NG","ZO","OJ","ZR","ZS","ES","SB","DX","ZW","D6")
     Assets <- BackAdj# or BackAdj[CMC_selection]
     results <- list()
+    forecasts <- list()
     exposures <- list()
     returns <- list()
     vols <- list()
@@ -945,7 +946,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- FALSE
     # Strategies weights
-    weights <- list("Trend"=0, "Carry"=1, "CSM"=0, "Skew"=0, "Test"=0)
+    weights <- list("Trend"=0.4, "Carry"=0.5, "CSM"=0, "Skew"=0.1, "Test"=0)
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
     # Asset class indices
@@ -968,6 +969,7 @@ print(res$Aggregate %>% unlist)
       df <- Assets[[symbol]]
       df$Volatility = calculate_volatility(df$Return)
       df$Position = lag(target_vol / df$Volatility)
+      df$Return[is.na(df$Return)] <- 0
       df$ForecastTrend <- df$ForecastCarry <- df$ForecastCSM <- df$ForecastSkew <- df$ForecastTest <- 0
       
       # Relative volatility (strategy 13, improvement is minimal, and we only apply it to trend)
@@ -1013,6 +1015,8 @@ print(res$Aggregate %>% unlist)
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
+      forecast <- 0#-multiple_FD(df$AdjClose) 
+      df$ForecastTest <-   cap_forecast(forecast * 1)
       
       {  # Tests
       # # Kurtosis
@@ -1066,6 +1070,7 @@ print(res$Aggregate %>% unlist)
                        weights[["Test"]] * df$ForecastTest) / 10 
       df$Forecast <- lag(df$Forecast)
       df$Excess <- df$Return * df$Position * df$Forecast * IDM 
+      forecasts[[symbol]]  <-   select(df, Date, Forecast) 
       exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast) %>% select(Date, Exposure) 
       returns[[symbol]]  <-  select(df, Date, Return)
       vols[[symbol]]  <-  select(df, Date, Volatility)
@@ -1083,12 +1088,12 @@ print(res$Aggregate %>% unlist)
     }
     ## Some figures takes from the Risk Management section
     # Figure 97: Portfolio volatility, check it is in line with target volatility
-    full_df_exposures <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), exposures) %>% arrange(Date)
-    full_df_returns <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), returns) %>% arrange(Date)
-    full_df_vols<- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), vols) %>% arrange(Date)
-    a <- sapply(181:nrow(full_df_returns),  function(i) { w <- as.numeric(full_df_exposures[i,-1]); w[is.na(w)] <- 0; S <-  cov(full_df_returns[(i-180):i,-1], use="pairwise.complete.obs"); S[is.na(S)] <- 0; sqrt( w %*% S %*% w  )  } )
-    plot.ts(a*100); abline(h=target_vol*100)
-    a <- rowSums(abs(full_df_exposures[,-1] * full_df_vols[,-1]), na.rm=T)
+    # full_df_exposures <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), exposures) %>% arrange(Date)
+    # full_df_returns <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), returns) %>% arrange(Date)
+    # full_df_vols<- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), vols) %>% arrange(Date)
+    # a <- sapply(181:nrow(full_df_returns),  function(i) { w <- as.numeric(full_df_exposures[i,-1]); w[is.na(w)] <- 0; S <-  cov(full_df_returns[(i-180):i,-1], use="pairwise.complete.obs"); S[is.na(S)] <- 0; sqrt( w %*% S %*% w  )  } )
+    # plot.ts(a*100); abline(h=target_vol*100)
+    # a <- rowSums(abs(full_df_exposures[,-1] * full_df_vols[,-1]), na.rm=T)
   }
   
 }
@@ -1157,3 +1162,39 @@ print(res$Aggregate %>% unlist)
   }
 }
 
+## Carver post on Skew/Kurtosis
+# https://qoppac.blogspot.com/2019/10/skew-and-expected-returns.html
+# General plotting by symbol
+res <- list()
+for(symbol in names(BackAdj)) {
+  df <- BackAdj[[symbol]]
+  returns <- na.omit(df$Return)
+  res[[df$Name[1]]] <- montecarlo_resampler(returns, 1000, skew)
+}
+full <- do.call(cbind, res)
+full <- full[,order(colMeans(full, na.rm=T))]
+boxplot(full, las=2, cex.axis=0.75); abline(h=0)
+# Rolling skew vs adjusted returns
+res <- list()
+for(freqs in c("5", "10", "20", "60", "120", "250")){
+  freq <- as.numeric(freqs)
+  res[[freqs]]  <- matrix(NA, ncol=2, nrow=1)
+  print(freqs)
+  for(symbol in names(BackAdj)) {
+    df <- BackAdj[[symbol]]
+    returns <- na.omit(df$Return)
+    s <- rollapply(returns, width=freq, skew,fill=NA, align="right")
+    r <- rollapply(returns, width=freq, mean, fill=NA, align="right")
+    v <- rollapply(returns, width=freq, sd, fill=NA, align="right")
+    r <- lead(r, freq)
+    v <- lead(v, freq)
+    sr <- 16 * r / v
+    res[[freqs]]  <- rbind(res[[freqs]] , cbind(s, sr))
+  }  
+  res[[freqs]]  <- data.frame(f=freq, res[[freqs]])
+}
+full <- do.call(rbind, res)
+full$h <- full$s > 0
+full <- na.omit(full)
+a <- full %>% group_by(f, h) %>% summarize(sr_m=median(sr), sr_s=mad(sr)/sqrt(n()))
+ggplot(a ) + geom_line(aes(f, sr_m, color=h)) +  geom_errorbar(aes(f, y=sr_m, ymin=sr_m-sr_s, ymax=sr_m+sr_s, color=h)) + theme(text = element_text(size=32))

@@ -37,6 +37,10 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6; do
   mv $today.$f.month $scrape_dir/$w2/$today.$w2.daily
   mv $today.$f.year $scrape_dir/$w2/$today.$w2.weekly
   mv $today.$f.holding_cost $scrape_dir/$w2/$today.$w2.holding_cost
+  # check the weekly file is not empty, otherwise just remove it
+  wf=$scrape_dir/$w2/$today.$w2.weekly 
+  wl=`wc -l $wf | cut -f 1 -d " "`
+  if [ $wl == 1 ]; then rm $wf; fi
 done <<< `tail -n+2 $instruments_file` 
 
 

@@ -109,9 +109,10 @@ backadjust_future <- function(df, N=1, period=365) {
   i <- 1; 
   adjclose <- rep(NA, nrow(m)); # the final continous backadjusted price
   close <- rep(NA, nrow(m)); # the current contract unadjusted price
-  basis <- rep(NA, nrow(m)); # basis as defined in gorton et. al 2013 
-  basis_price <- rep(NA, nrow(m)); # basis as defined in gorton et. al 2013 
+  basis <- rep(NA, nrow(m)); # basis as log differences
+  basis_price <- rep(NA, nrow(m)); # basis as price differences
   basis_distance <- rep(NA, nrow(m)); # months between basis contracts
+  basis_gordon <- rep(NA, nrow(m)); # months between basis contracts as defined in gorton et. al 2013 
   spot <- rep(NA, nrow(m)); # implied spot price as defined in gorton et. al 2013 
   rollover <- rep(FALSE, nrow(m)); # rollover dates
   contract <- rep(NA, nrow(m)); # current contract
@@ -138,7 +139,7 @@ backadjust_future <- function(df, N=1, period=365) {
       basis[i] <- log(m[i,j]) - log(m[i,k]) # simple log difference between contracts
       basis_price[i] <- m[i,j] - m[i,k] # simple price difference between contracts
       basis_distance[i] <- ym[k] - ym[j] # distance in months
-      basis_gordon[i] <- period * (m[i,j] / m[i,k]) - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
+      basis_gordon[i] <- period * ((m[i,j] / m[i,k]) - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
       #spot[i] <-  m[i,j] * (1 + basis[i] / period * (ec[j]-i)) # as defined in Gorton et al. 2013
     }
     if(!(is.na(m[i,j]) | is.nan(m[i,j]))) {
@@ -286,11 +287,13 @@ intramarket_spread <- function(df, N=1, D=1) {
   # Backadjust the prices
   BackAdj <- list()
   for(symbol in names(Futures)) {
-    if(!is.null(BackAdj[[symbol]]))
+    if(!is.null(BackAdj[[symbol]])) {
       next
+    }
     print(symbol)
     BackAdj[[symbol]] <- backadjust_future(Futures[[symbol]], N=2)
     BackAdj[[symbol]]$Symbol <- symbol
+    BackAdj[[symbol]]$Name <- to_load$Name[to_load$Symbol == symbol]
     BackAdj[[symbol]]$Class <- to_load$Class[to_load$Symbol == symbol]
   }
   write_rds(BackAdj, "/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")

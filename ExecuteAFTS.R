@@ -88,7 +88,7 @@
       df_weekly <- df_weekly[-1,]
     }
     # only keep weekly data up to the start of daily data
-    df_weekly <- mutate(df_weekly, Date=as.Date(Date)) %>% dplyr::filter(Date < df_daily$Date[7])
+    df_weekly <- mutate(df_weekly, Date=as.Date(Date)) %>% dplyr::filter(Date < df_daily$Date[1])
     # interpolate weekly data to create daily data
     # first, recreate full daily Date excluding weekends
     dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% 
@@ -96,7 +96,9 @@
     # then interpolate
     df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close))
     # merge all data
-    df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup %>%
+    df_daily$Period <- "Daily"
+    df_weekly$Period <- "Weekly"
+    df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>%
       arrange(Date)
     
     # load last holding cost
@@ -229,7 +231,6 @@
   
 
   
-
   ## Greedy algorithm to find a set of positions closest to the optimal provided. Adapted from "Advanced futures trading strategies (2022)".
   ## refer to the book for details. 
   # capital : your money in your account currency
@@ -264,7 +265,7 @@
       return(track_error + trade_costs)
     }
     # The greedy algorithm (see https://qoppac.blogspot.com/2021/10/mr-greedy-and-tale-of-minimum-tracking.html)
-    find_possible_new_best <- function(weights_optimal, weights_max, weights_per_contract, direction, best_solution, best_value, cov_matrix, max_factor) {
+    find_possible_new_best <- function(weights_optimal, weights_max, weights_per_contract, direction, best_solution, best_value, cov_matrix, max_factor, buffer) {
       new_best_value <- best_value
       new_solution <- best_solution
       count_assets <- length(best_solution)
@@ -278,7 +279,7 @@
         if(abs(temp_step[i]) > weights_max[i])
           temp_step[i] <- weights_max[i] * sign(temp_step[i])
         else if (abs(temp_step[i]) > max_factor * abs(weights_optimal[i]))
-          temp_step[i] <- max_factor * weights_optimal[i] 
+          temp_step[i] <- max_factor * weights_optimal[i]
         temp_objective_value <- evaluate(weights_optimal, temp_step, cov_matrix)
         if (temp_objective_value < new_best_value) {
           new_best_value <- temp_objective_value
@@ -306,11 +307,11 @@
     }
     weights_per_contract <- notional_exposures / capital
     weights_optimal <- optimal_positions * weights_per_contract 
-    weights_max <- if(!is.null(max_positions)) max_positions * weights_per_contract else Inf
+    weights_max <- if(!is.null(max_positions)) max_positions * weights_per_contract else rep(Inf, n)
     weights_min <- if(!is.null(min_positions)) min_positions * weights_per_contract else weights_per_contract * fractional
     weights_previous <- previous_position * weights_per_contract
     costs_per_trade_in_weight <- (costs_per_contract  / capital) / weights_per_contract
-    best_solution <- rep(0, n)
+    best_solution <- rep(0,n)
     best_value <- evaluate(weights_optimal, best_solution, cov_matrix)
     while (1) {
       res <- find_possible_new_best(weights_optimal, weights_max, weights_per_contract, sign(weights_optimal), best_solution, best_value, cov_matrix, max_factor)
@@ -363,7 +364,7 @@
   logs_instruments_dir <- paste0(logs_dir, "Instruments/")
   scrape_script <- "SCRAPE_DATA.sh"
   target_vol <- 0.33
-  IDM = 2.5
+  IDM = 3.5
   FDMtrend <- 1.3
   FDMcarry <- 3.3
   FDMskew <- 1.2
@@ -371,7 +372,7 @@
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
   corr_length <- 25
   portfolio_buffering_level <- 0.1
-  position_buffering_level <- 0.2
+  position_buffering_level <- 0.25
   trade_shadow_cost <- 0
 }
 
@@ -457,14 +458,14 @@ if(capital <= 0 | is.na(capital))
   
   # the covariance matrix
   print("Calculate covariance matrix...")
-  closes <- lapply(instruments_data, function(x)x[[1]])
+  closes <- lapply(instruments_data, function(x)x[[1]] %>% select(Date, Close))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
   daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
-  #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs")
-  cor_matrix <- runCorMatrix(as.matrix(weekly_returns[,-1]))[[ncol(weekly_returns[,-1])]]
+  #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs") # static last corr matrix
+  cor_matrix <- runCorMatrix(as.matrix(weekly_returns[,-1]))[[ncol(weekly_returns[,-1])]] # running corr matrix
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
@@ -479,7 +480,10 @@ if(capital <= 0 | is.na(capital))
     df$Symbol <- symbol
     df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionOptimal <- df$PositionOptimized <- df$AdjFactor  <- df$RequiredTrade <- df$Buffer <- df$Trading <- df$PositionPrevious <- df$PositionUnrounded <- df$Position <- df$PositionRisk  <- 0
     df$Return <- c(0, diff(log(df$Close)))
-    df$Volatility = calculate_volatility(df$Return)
+    df$Return[df$Period=="Weekly"]  <- df$Return[df$Period=="Weekly"] * 4.84 # adjust weekly data to daily volatility (4.84=252/52). Not sure if correct and/or necessary
+    df$Volatility <- calculate_volatility(df$Return)
+    df$Period <- NULL
+    
     fx <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(FX)
     if(fx == "EUR") {
       df$FX <- 1 
@@ -520,6 +524,7 @@ if(capital <= 0 | is.na(capital))
                               df$Product[1] == "Future" ~ 0.03,
                               TRUE ~ NA_real_)
     hc_value <- (hc[hc_max]+hc_commission)
+    # When carry is always against us (both long and short charge us), we assume it is zero
     if(hc_value < 0)
       hc_value <- 0
     df$ForecastCarry <- ifelse(hc_max == 1, 1, -1) * hc_value / df$Volatility * 10 
@@ -541,6 +546,7 @@ if(capital <= 0 | is.na(capital))
       (df$ContractSize * df$Close  ) 
     df$PositionMax <- (df$Exposure * df$FX * 20/10) /
       (df$ContractSize * df$Close  ) 
+    df$Buffer <- position_buffering_level * (df$Exposure * df$FX * 10/10) / (df$ContractSize * df$Close)
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
     #write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
@@ -581,7 +587,7 @@ if(capital <= 0 | is.na(capital))
   today_trading$RequiredTrade <- required_trades
   today_trading$RequiredTrade <- with(today_trading, ifelse(abs(RequiredTrade) > 0 & PositionPrevious == 0, PositionOptimized, RequiredTrade))
   # trade only if the required trade if bigger than buffer, bigger than position tick size and bigger than minumum position
-  today_trading$Trading <- with(today_trading, abs(RequiredTrade) > Buffer & abs(RequiredTrade) > PositionTick & abs(RequiredTrade) > PositionMin)
+  today_trading$Trading <- with(today_trading, abs(RequiredTrade) >= Buffer & abs(RequiredTrade) >= PositionTick & abs(RequiredTrade) >= PositionMin)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, PositionMin, PositionTick))  
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
@@ -609,5 +615,55 @@ if(capital <= 0 | is.na(capital))
   write_csv(today_trading, "POSITIONS.csv")
 }
 
+# 
+# ## some backtesting on real CMC data, to be removed
+# full <- Reduce(function(...) full_join(..., by="Date"), all) %>% arrange(Date) %>% na.omit
+# closes <- full[,grep("^Date|^Close", colnames(full))]
+# colnames(closes)<-c("Date", names(instruments_data))
+# positionoptimal <- full[,grep("^Date|^PositionOptimal", colnames(full))]
+# colnames(positionoptimal)<-c("Date", names(instruments_data))
+# positionmax <- full[,grep("^Date|^PositionMax", colnames(full))]
+# colnames(positionmax)<-c("Date", names(instruments_data))
+# buffers <- full[,grep("^Date|^Buffer", colnames(full))]
+# colnames(buffers)<-c("Date", names(instruments_data))
+# positionmin <- full[,grep("^Date|^PositionMin", colnames(full))]
+# colnames(positionmin)<-c("Date", names(instruments_data))
+# exposure <- full[,grep("^Date|^Exposure", colnames(full))]
+# colnames(exposure)<-c("Date", names(instruments_data))
+# fx <- full[,grep("^Date|^FX", colnames(full))]
+# colnames(fx)<-c("Date", names(instruments_data))
+# contractsize <- full[,grep("^Date|^ContractSize", colnames(full))]
+# colnames(contractsize)<-c("Date", names(instruments_data))
+# spread <- full[,grep("^Date|^Spread", colnames(full))]
+# colnames(spread)<-c("Date", names(instruments_data))
+# tick <- full[,grep("^Date|Tick", colnames(full))]
+# colnames(tick)<-c("Date", names(instruments_data))
+# 
+# position_optimized <- matrix(0, nrow=nrow(closes), ncol=ncol(closes)-1)
+# for(i in 1:nrow(closes)) {
+#   print(i)
+#   Close <- closes[i,-1]%>% unlist
+#   optimal_positions <- positionoptimal[i,-1] %>% unlist
+#   max_positions <- positionmax[i,-1]%>% unlist
+#   min_positions <- positionmin[i,-1]%>% unlist
+#   ContractSize <- contractsize[i,-1]%>% unlist
+#   PositionTick <- tick[i,-1]%>% unlist
+#   FX <- fx[i,-1]%>% unlist
+#   Spread <- spread[i,-1]%>% unlist
+#   buffer <- buffers[i,-1]%>% unlist
+#   notional_exposures <- ContractSize * Close / FX
+#   costs_per_contract <-  ContractSize * (Spread/2) / FX
+#   previous_position <- positionoptimal[(i-1),-1]%>% unlist
+# 
+#   if(any(is.na(optimal_positions)))
+#     next
+#   if(any(is.na(previous_position)))
+#     next
+# 
+#   position_dynamic <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix,
+#                                         previous_position = previous_position, max_positions = max_positions, min_positions = min_positions,
+#                                         costs_per_contract=costs_per_contract, trade_shadow_cost = trade_shadow_cost, max_factor=2)
+#   position_optimized[i,] <- position_dynamic
+# }
 
 
