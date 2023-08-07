@@ -18,7 +18,7 @@
 {
   decimalplaces <- function(x) {
     if ((x %% 1) != 0) {
-      nchar(strsplit(sub('0+$', '', as.character(x)), ".", fixed=TRUE)[[1]][[2]])
+      nchar(strsplit(sub('0+$', '', format(x, scientific = FALSE)), ".", fixed=TRUE)[[1]][[2]])
     } else {
       return(0)
     }
@@ -29,7 +29,9 @@
   }
   
   runCorMatrix <- function(M, n=25) {
+    nas <- lapply(1:(n-1), function(i)matrix(NA, nrow = ncol(M), ncol = ncol(M)))
     run_corr_matrices <- lapply(n:nrow(M), function(i) cor(M[(i-n):i,], use="pairwise.complete.obs"))
+    run_corr_matrices <- c(nas, run_corr_matrices)
     run_corr_vectors <- lapply(run_corr_matrices, as.vector) 
     corr_by_date <- do.call(cbind, run_corr_vectors)
     ema_corr_by_date <- apply(corr_by_date, 1, EMA, n) %>% t 
@@ -46,6 +48,13 @@
   # weekly data is leaded 2 days
   load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
     symbol_dir <- paste0(dir, "/", symbol)
+    # # load intra-day data
+    system(paste("cat", paste(list.files(symbol_dir, pattern = "intraday", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
+    df_intraday <- fread("_tmp", header= FALSE)
+    colnames(df_intraday) <- c("Date", "Close")
+    df_intraday$Date <- as_datetime(df_intraday$Date)
+    df_intraday <- arrange(df_intraday, Date)
+    df_intraday <- tail(df_intraday, 1)
     # # load daily data, lag date by one day
     # files <- list()
     # for (l in list.files(symbol_dir, pattern = "daily")) {
@@ -64,6 +73,8 @@
     df_daily <- arrange(df_daily, Date)
     if(lagged) 
       df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
+    # only keep daily data up to the last element of intradaily data
+    df_daily <-  dplyr::filter(df_daily, Date < df_intraday$Date[1])
     # load weekly data, lag date by two days
     # files <- list()
     # for (l in list.files(symbol_dir, pattern = "weekly")) {
@@ -94,13 +105,14 @@
     dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% 
       as_tibble() %>% mutate(Date=value) %>% select(-value) %>% dplyr::filter(!(lubridate::wday(Date, label = TRUE) %in% c("Sat", "Sun")))
     # then interpolate
-    df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close))
+    df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close), Date=as_date(Date))
     # merge all data
+    df_intraday$Period <- "Intraday"
     df_daily$Period <- "Daily"
     df_weekly$Period <- "Weekly"
     df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>%
-      arrange(Date)
-    
+      arrange(Date) %>% mutate(Date=as_datetime(Date))
+    df <- rbind(df, tail(df_intraday, 1)) %>% mutate(Date=as.Date(Date))
     # load last holding cost
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
@@ -392,7 +404,9 @@ if(capital <= 0 | is.na(capital))
 
 
 {
-  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "Portfolio Buffering Level:", portfolio_buffering_level, "Position Buffering Level:", position_buffering_level))
+  print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, 
+              "Portfolio Buffering Level:", portfolio_buffering_level, "Position Buffering Level:", position_buffering_level, 
+              "Trading Shadow Cost:", trade_shadow_cost))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
@@ -461,17 +475,21 @@ if(capital <= 0 | is.na(capital))
   closes <- lapply(instruments_data, function(x)x[[1]] %>% select(Date, Close))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
-  daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0,diff(log(x))))) 
+  daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0, diff(log(x)))))
+  daily_returns <- na.omit(daily_returns) # Potentially dangerous?
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
   #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs") # static last corr matrix
-  cor_matrix <- runCorMatrix(as.matrix(weekly_returns[,-1]))[[ncol(weekly_returns[,-1])]] # running corr matrix
+  Q <- runCorMatrix(as.matrix(weekly_returns[,-1]))
+  cor_matrix <- Q[[length(Q)]] # running corr matrix
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
+  
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
 
   # iterate over data and calculate positions
   print("Calculate new positions...")
+  all <- list()
   results <- list()
   for(symbol in names(instruments_data)) {
     print(symbol)
@@ -547,9 +565,10 @@ if(capital <= 0 | is.na(capital))
     df$PositionMax <- (df$Exposure * df$FX * 20/10) /
       (df$ContractSize * df$Close  ) 
     df$Buffer <- position_buffering_level * (df$Exposure * df$FX * 10/10) / (df$ContractSize * df$Close)
+    all[[symbol]] <- df
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
-    #write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
+    write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
     results[[symbol]] <- df[1,]
   }
   # Final table

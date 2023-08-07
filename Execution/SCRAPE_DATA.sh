@@ -24,19 +24,26 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6; do
   apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
   apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
   # download the correspong "hidden" data, both daily (up to 5 months) and weekly (up to 5 year)
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/DAY/3?key=$apikey" -O "_day."$f.txt
   wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/MONTH/5?key=$apikey" -O "_month."$f.txt
   wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/YEAR/5?key=$apikey" -O "_year."$f.txt
   # extract the relevant infos, which are the Date and the Close price from the previous 2 files
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T/ /g' -e  's/Z//g' -e 's/"//g' "_day."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.day
   sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_month."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.month
   sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_year."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.year 
   # download the "hidden" json file, where we can find the holding costs
   wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json
   grep .yearlyPercentageBuy.*tradingHours "_"$f.json  -o | sed -e 's/},"tradingHours//' -e 's/"[^"]*"://g' -e 's/"//g' | awk -F ","  -v d=$today_dash ' function abs(v) {return v < 0 ? -v : v}  {if($2 == "CHARGED") b=-abs($1); else b=abs($1); if($4 == "CHARGED") s=-abs($3); else s=abs($3); print d,",",b,",",s}'  > $today.$f.holding_cost 
   # remove temp file and move everything to the correspoing symbol folder
-  rm "_month."$f.txt "_year."$f.txt _scrape.$f.html "_"$f.json
+  rm  "_day."$f.txt "_month."$f.txt "_year."$f.txt _scrape.$f.html "_"$f.json
+  mv $today.$f.day $scrape_dir/$w2/$today.$w2.intraday  
   mv $today.$f.month $scrape_dir/$w2/$today.$w2.daily
   mv $today.$f.year $scrape_dir/$w2/$today.$w2.weekly
   mv $today.$f.holding_cost $scrape_dir/$w2/$today.$w2.holding_cost
+  # check the intraday file is not empty, otherwise just remove it
+  if=$scrape_dir/$w2/$today.$w2.intraday  
+  il=`wc -l $if | cut -f 1 -d " "`
+  if [ $il == 1 ]; then rm $if; fi
   # check the weekly file is not empty, otherwise just remove it
   wf=$scrape_dir/$w2/$today.$w2.weekly 
   wl=`wc -l $wf | cut -f 1 -d " "`

@@ -889,22 +889,17 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, Kurtosis))
     return(forecast)
   }
-  returns_kurtosis_2 <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
+  multiple_ER <- function(close, spans=c(20, 60, 120, 250, 500), scalars=c(70.1, 90.2, 105.2, 117.2, 127.37), avgs=c(0.197, 0.112, 0.079, 0.053, 0.038), cap=20) {
     n <- length(spans)
-    returns[is.na(returns)] <- 0
-    Kurtosis <- lapply(1:n, function(i) {
-                                          mult <- min(spans[i]*10, length(returns)) 
-                                          x <- rollapply(returns, width=spans[i], kurt,  fill=NA, align="right") - 3;
-                                          x[is.na(x)] <- 0
-                                          x - runMean(x, n = mult)
-                                        })
-    Kurtosis <-  lapply(1:n, function(i) replace(Kurtosis[[i]], is.na(Kurtosis[[i]]), 0))
-    Kurtosis <-  lapply(1:n, function(i) EMA(-Kurtosis[[i]], ceiling(spans[i]/4)) * scalars[i])
-    Kurtosis <- lapply(1:n, function(i) cap_forecast(Kurtosis[[i]], cap))
-    forecast <- rowMeans(do.call(cbind, Kurtosis))
+    ERs <- lapply(1:n, function(i) sqrt(rollapply(close, width=spans[i], ER, fill=NA, align="right")) - sqrt(avgs[i]) )
+    ERs <- lapply(1:n, function(i) ERs[[i]]  * scalars[i] )
+    ERs <- lapply(1:n, function(i) cap_forecast(ERs[[i]]))
+    forecast <- rowMeans(do.call(cbind, ERs))
     return(forecast)
   }
-  }
+
+  
+}
     
   
   # load all CMC and other cash data (to test with CMC data uhmm....)
@@ -946,7 +941,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- FALSE
     # Strategies weights
-    weights <- list("Trend"=0.4, "Carry"=0.5, "CSM"=0, "Skew"=0.1, "Test"=0)
+    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "CSM"=0, "Skew"=0, "Test"=1)
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1015,7 +1010,7 @@ print(res$Aggregate %>% unlist)
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
-      forecast <- 0#-multiple_FD(df$AdjClose) 
+      forecast <- 0#rollapply(df$Return, width=120, tail_ratio, fill=NA, align="right") - rollapply(df$Return, width=2520, tail_ratio, fill=NA, align="right")
       df$ForecastTest <-   cap_forecast(forecast * 1)
       
       {  # Tests
@@ -1165,36 +1160,74 @@ print(res$Aggregate %>% unlist)
 ## Carver post on Skew/Kurtosis
 # https://qoppac.blogspot.com/2019/10/skew-and-expected-returns.html
 # General plotting by symbol
+func <- tail_ratio
+Assets <- BackAdj
 res <- list()
-for(symbol in names(BackAdj)) {
-  df <- BackAdj[[symbol]]
-  returns <- na.omit(df$Return)
-  res[[df$Name[1]]] <- montecarlo_resampler(returns, 1000, skew)
+for(symbol in names(Assets)) {
+  print(symbol)
+  df <- Assets[[symbol]]
+  x <- na.omit(df$Return)
+  res[[df$Name[1]]] <- montecarlo_resampler(x, 100, func) 
 }
-full <- do.call(cbind, res)
-full <- full[,order(colMeans(full, na.rm=T))]
+res[["RANDOM"]] <- montecarlo_resampler(rnorm(100000, 0, 0.005), 100, func)
+full <- do.call(cbind, res) 
+full <- full[,order(colMedians(full, na.rm=T))]
 boxplot(full, las=2, cex.axis=0.75); abline(h=0)
+# Global plot feature vs return
+func <- tail_ratio
+a <- lapply(Assets, function(df){x <- na.omit(df$Return); r <- na.omit(df$Return); c(func(x), mean(r))}) %>% do.call(rbind,.)
+plot(a, type="n"); text(a[,1], a[,2], rownames(a));abline(h=0)
+a <- lapply(Assets, function(df){x <- na.omit(df$Return); r <- na.omit(df$Return); c(func(x), mean(r)/sd(r)*16)}) %>% do.call(rbind,.)
+rownames(a) <- sapply(Assets, function(x)x$Name[1])
+plot(a, type="n"); text(a[,1], a[,2], rownames(a));abline(h=0)
 # Rolling skew vs adjusted returns
-res <- list()
-for(freqs in c("5", "10", "20", "60", "120", "250")){
-  freq <- as.numeric(freqs)
-  res[[freqs]]  <- matrix(NA, ncol=2, nrow=1)
-  print(freqs)
-  for(symbol in names(BackAdj)) {
-    df <- BackAdj[[symbol]]
-    returns <- na.omit(df$Return)
-    s <- rollapply(returns, width=freq, skew,fill=NA, align="right")
-    r <- rollapply(returns, width=freq, mean, fill=NA, align="right")
-    v <- rollapply(returns, width=freq, sd, fill=NA, align="right")
-    r <- lead(r, freq)
-    v <- lead(v, freq)
-    sr <- 16 * r / v
-    res[[freqs]]  <- rbind(res[[freqs]] , cbind(s, sr))
-  }  
-  res[[freqs]]  <- data.frame(f=freq, res[[freqs]])
+func <- tail_ratio
+assets_long_term_values <- list()
+for(symbol in names(Assets)) {
+  df <- Assets[[symbol]] 
+  assets_long_term_values[[symbol]] <- data.frame(Date=as.Date(df$Date), 
+                                                  long_term_values=rollapply(df$Return, width=2520, func, fill=NA, align="right"))
 }
-full <- do.call(rbind, res)
-full$h <- full$s > 0
-full <- na.omit(full)
-a <- full %>% group_by(f, h) %>% summarize(sr_m=median(sr), sr_s=mad(sr)/sqrt(n()))
-ggplot(a ) + geom_line(aes(f, sr_m, color=h)) +  geom_errorbar(aes(f, y=sr_m, ymin=sr_m-sr_s, ymax=sr_m+sr_s, color=h)) + theme(text = element_text(size=32))
+full_long_term <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), assets_long_term_values) %>% arrange(Date)
+colnames(full_long_term) <- c("Date", names(Assets))
+long_term_cs <- data.frame(Date=full_long_term[,1], LTCS=rowMedians(full_long_term[,-1] %>% as.matrix(), na.rm = T))
+res_func <- list()
+for(freqs in c("10", "20", "60", "120", "250", "500")){ 
+  freq <- as.numeric(freqs)
+  res_func[[freqs]]  <- data.frame(matrix(NA, ncol=6, nrow=1))
+  colnames(res_func[[freqs]])  <- c("Symbol", "Date", "Values", "Means", "Vols", "LTV")
+  print(freqs)
+  for(symbol in names(Assets)) {
+    df <- Assets[[symbol]] 
+    x <- df$Return # either Close or AdjClose
+    return <- df$Return
+    return[is.na(return)] <- 0
+    date <- as.Date(df$Date)
+    long_term_values <- assets_long_term_values[[symbol]][,2]
+    values <- rollapply(x, width=freq, func, fill=NA, align="right") 
+    means <- runMean(return, freq)
+    vols <- runSD(return, freq)
+    means <- lead(means, freq)
+    vols <- lead(vols, freq)
+    res_func[[freqs]]  <- rbind(res_func[[freqs]] , data.frame(Symbol=symbol, Date=as.Date(date), Values=values, Means=means, Vols=vols, LTV=long_term_values))
+  }  
+  res_func[[freqs]]  <- data.frame(f=freq, res_func[[freqs]])
+}
+full <- do.call(rbind, res_tail_ratio_futures)
+# full <- group_by(full, f, symbol) %>% 
+#   summarise(f=f, symbol=symbol, date=as.Date(date),means=means, vols=vols, values=values, total_avg=median(values, na.rm=T), moving_values = AbsoluteStrength(values %>% na.locf(na.rm=F), f))
+full <- merge(full, long_term_cs, by="Date")
+full$SR <- (full$Means / full$Vols * 16) 
+# Absolute: versus against some meaningful fixed value (zero?)
+full$Cond_abs <- full$Values > 0
+# Relative to this particular assets history (10 years)
+full$Cond_ts <- full$Values > full$LTV
+# Relative to the current cross sectional average across all assets 
+full$Cond_cs <- full$Values > full$LTCS
+# Choose one
+full$h <- full$Cond_ts
+#full <- filter(full, !is.na(h))
+a <- full %>% filter(!is.na(h)) %>% group_by(f, h) %>% summarize(SR_m=median(SR, na.rm=T), SR_s=mad(SR, na.rm=T)/sqrt(n()))
+ggplot(a ) + geom_line(aes(f, SR_m, color=h)) +  geom_errorbar(aes(f, y=SR_m, ymin=SR_m-SR_s, ymax=SR_m+SR_s, color=h)) + theme(text = element_text(size=32))
+full %>% NaRV.omit() -> full; lapply(unique(full$f), function(x) t.test(full$sr[full$f==x & full$h], full$sr[full$f==x & !full$h])$statistic  ) %>% unlist
+
