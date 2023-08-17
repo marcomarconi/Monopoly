@@ -10,40 +10,11 @@
   library(tsibble)
   library(data.table)
   source("/home/marco/trading/Systems//Common/Common.R")
+  source("/home/marco/trading/Systems//Common/Reports.R")
+  source("/home/marco/trading/Systems//Common/Indicators.R")
   setwd("/home/marco/trading/Systems/Monopoly/")
   Sys.setlocale("LC_TIME", "en_US.UTF-8")
   theme_set(theme_bw(base_size = 32))
-}
-
-
-# Load Forex data
-{
-  broker <- "Barchart"  
-  Returns <- list()
-  Prices <- list()
-  Symbols <- list()
-  dir <- paste0("/home/marco/trading/Historical Data/", broker,"/OTHER/Forex/" )
-  currencies <- c("USD", "EUR", "GBP", "CHF", "CAD", "NZD", "AUD", "JPY", "SGD", "SGD", "CZK", "HUF", "HKD", "SEK", "NOK", "MXN",  "ZAR", "DKK", "CNH", "TRY")
-  for(f in list.files(dir, pattern = ".csv")) {
-    a <- read.csv(paste0(dir, "/", f))
-    a <- zoo::na.locf(a, na.rm = FALSE)
-    f <- sub("\\.csv", "", f)
-    print(f)
-    a$Symbol <- f
-    a <- rename(a, Close=Last, Date=Time, Ticks=Volume)
-    a <- mutate(a, Date=as.Date(Date, format="%m/%d/%Y")) %>%arrange(Date) %>% mutate(Date=as.character(Date))
-    a$Return <- c(0, diff(log(a$Close)))
-    Symbols[[f]] <- a
-  }
-  df = Reduce(function(...) full_join(..., by="Date"), Symbols)
-  Returns <- df[,grep("^Date|Return", colnames(df))]
-  colnames(Returns) <- c("Date", names(Symbols))
-  Returns$Date <- as.Date(Returns$Date)
-  Returns <- arrange(Returns, Date)
-  Closes <- df[,grep("^Date|^Close", colnames(df))]
-  colnames(Closes) <- c("Date", names(Symbols))
-  Closes$Date <- as.Date(Closes$Date)
-  Closes <- arrange(Closes, Date)
 }
 
 # for some reason, scrapped CMC data are lagged one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
@@ -165,27 +136,22 @@ backadjust_future <- function(df, N=1, period=365) {
 }
 
 # create a backadjusted future spread contract
-backadjust_spread <- function(df1, df2, N1=1, N2=1, mult=c(1,1), func=backadjust_future, log=FALSE) {
-  c1 <- func(df1, N1, log=log)
-  c2 <- func(df2, N2, log=log)
+backadjust_spread <- function(df1, df2, N1=1, N2=1, mult=c(1,1), func=backadjust_future) {
+  c1 <- func(df1, N1)
+  c2 <- func(df2, N2)
   z <- merge(c1, c2, by="Date", all=TRUE)
   z$Adjs.x <- zoo::na.locf.default(z$Adjs.x, na.rm = FALSE, fromLast = TRUE)
   z$Adjs.y <- zoo::na.locf.default(z$Adjs.y, na.rm = FALSE, fromLast = TRUE)
-  if(log){
-    nearest <- z$Nearest.x+log(mult[1]) - z$Nearest.y+log(mult[2])
-    backadj <- nearest + (z$Adjs.x+log(mult[1]) - z$Adjs.y+log(mult[2]))
-  }
-  else {
-    nearest <- z$Nearest.x*mult[1] - z$Nearest.y*mult[2]
-    backadj <- nearest + (z$Adjs.x*mult[1] - z$Adjs.y*mult[2])
-  }
-  
-  return(data.frame(Date=z[,1], Near1=z$Nearest.x, Near2=z$Nearest.y, 
-                    Backadj1=z$Backadjusted.x, Backadj2=z$Backadjusted.y, 
+  close <- z$Close.x*mult[1] - z$Close.y*mult[2]
+  backadj <- close + (z$Adjs.x*mult[1] - z$Adjs.y*mult[2])
+  z$Return.x <- z$Return.x * mult
+  z$Return.y <- z$Return.y * mult
+  return(data.frame(Date=z[,1], Close1=z$Close.x, Close2=z$Close.y, 
+                    Backadj1=z$AdjClose.x, Backadj2=z$AdjClose.y, 
                     Rollover1=z$Rollover.x, Rollover2=z$Rollover.y, 
                     Adj1=z$Adjs.x , Adj2=z$Adjs.y, 
                     Return1=z$Return.x, Return2=z$Return.y,
-                    Nearest=nearest, Backadjusted=backadj))
+                    Close=close, AdjClose=backadj, Return=z$Return.x-z$Return.y))
 }
 
 # Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
@@ -380,12 +346,13 @@ intramarket_spread <- function(df, N=1, D=1) {
   }
   # Create ACF and PACF or year-to-year monthly log differences 
   setwd("/home/marco/trading/Systems/Monopoly/")
-  dir.create("Plots/Acf_yearly_backadj") # select nearest of backadj
-  setwd("Plots/Acf_yearly_backadj")
+  dir.create("Plots/Acf_weekly")
+  setwd("Plots/Acf_weekly")
   for(symbol in names(BackAdj)){
+    print(symbol)
     df <- BackAdj[[symbol]]
-    df <-  mutate(df, Date = yearmonth(Date)) %>% group_by(Date) %>%  summarise_all(last) %>% mutate(Date=as.Date(Date))
-    r <- (df$Backadjusted - lag(df$Backadjusted, 12)) - 1 # nearest or backadjsted
+    df <-  mutate(df, Date = yearweek(Date)) %>% group_by(Date) %>%  summarise(Return=sum(Return, na.rm=T))
+    r <- df$Return
     name <- to_load$Name[which(to_load$Symbol == symbol)]
     png(paste0(name, "_Acf.png"))
     Acf(r, main=name, lag.max = 100)
@@ -539,7 +506,10 @@ intramarket_spread <- function(df, N=1, D=1) {
   dir.create("Plots/Seasonalty") 
   setwd("Plots/Seasonalty")
   for(symbol in names(BackAdj)){
+    print(symbol)
     df <- BackAdj[[symbol]] %>% filter(year(Date) > 2000)
+    df$Volatility <- calculate_volatility(df$Return)
+    df$Return <- df$Return / df$Volatility * 16 * 100 # Seasonality adjusted, comment it if unwanted
     a <- group_by(df, week(Date)) %>% summarise(Week=first(week(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
     p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_yearly.png"), p, width=12, height=9,dpi=150)
@@ -549,6 +519,9 @@ intramarket_spread <- function(df, N=1, D=1) {
     a <- group_by(df, wday(Date)) %>% summarise(Day=first(wday(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
     p <- ggplot(a) + geom_bar(aes(Day, Mean), stat="identity") + geom_errorbar(aes(x=Day, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_wday.png"), p, width=12, height=9,dpi=150)
+    a <- mutate(df, dom = mday(Date)) %>% mutate(W = case_when(dom <= 7 ~ 1, dom > 7 & dom <= 14 ~ 2, dom > 14 & dom <= 21 ~ 3, dom > 21 & dom <= 31 ~ 4, TRUE ~ 0)) %>% group_by(W) %>% summarise(Week=first(W), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
+    p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    ggsave(filename = paste0(symbol, "_weekmonth.png"), p, width=12, height=9,dpi=150)
   }
   
   # Create data.frames to plot animated forward curve
@@ -599,30 +572,90 @@ intramarket_spread <- function(df, N=1, D=1) {
   fig1
 }
 
-
-
-
-## Seasonality-based trades
+# Volatiliy spread
 {
-
-# Lumber
-df <- BackAdj[["LS"]] %>% filter(year(Date) > 2000)
-a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>% 
-  mutate(Trend = lag(AbsoluteStrength(Backadjusted)), Cost = 0.005) %>% 
-  mutate(Trade = case_when(dom <= 3 & Basis < 0 & Trend < 0 ~ -1 , dom > 3  & Trend > 0 & Basis > 0  ~ 1, TRUE ~ 0)) %>% 
-  mutate(Excess = Return * Trade) %>% 
-  group_by(date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
-  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
-ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
-with(a, mean(Excess)/sd(Excess)*sqrt(52))
-# Copper
-df <- BackAdj[["HG"]] %>% filter(year(Date) > 2000)
-a <- mutate(df, dom=wday(Date), date=yearweek(Date)) %>% 
-  mutate( Cost = 0.0008)%>% 
-  mutate(Trade = case_when(dom == 6  ~ 1 , TRUE ~ 0)) %>% 
-  mutate(Excess = Return * Trade) %>% 
-  group_by(date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
-  summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
-ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
-with(a, mean(Excess)/sd(Excess)*sqrt(52))
+vol <- merge(BackAdj$VI, BackAdj$DV, by="Date")
+vol$Close <- (vol$Close.x - vol$Close.y*42 )%>% na.locf(na.rm=F)
+vol$Return <- vol$Return.x - vol$Return.y
+vol$Volatility <- calculate_volatility(vol$Return)
+vol$Position <- 0.4 / vol$Volatility
+cost <- 0.008
+d <- BBands(vol$Close , 32, maType = SMA)
+vol$Trade <- 0
+vol$Cost <- 0
+for(i in 2:nrow(vol)) {
+  vol$Trade[i] <- vol$Trade[i-1]
+  if(d[i,2] %>% is.na) next;
+  if(vol$Trade[i] == 0) {
+    if(vol$Close[i] < d[i,1]) {
+      vol$Trade[i] <- 1; 
+      vol$Cost[i] <- cost 
+    }
+    if(vol$Close[i] > d[i,3]) {
+      vol$Trade[i] <- -1; 
+      vol$Cost[i] <- cost
+    }
+  } else {
+    if(vol$Trade[i] == 1 & vol$Close[i] > d[i,2]) 
+      vol$Trade[i] <- 0; 
+    if(vol$Trade[i] == -1 & vol$Close[i] < d[i,2]) 
+      vol$Trade[i] <- 0;
+  }
 }
+vol$Trade <- lag(vol$Trade)
+vol$Cost <- lag(vol$Cost)
+i <- 250
+f <- tail(vol, i)
+plot(f$Close, col=f$Trade+2, pch=16, cex=2 )
+lines(f$Close, col="gray")
+matplot2(d[,1:3] %>% tail(i), add=T)
+vol$Excess <- vol$Return * vol$Trade * vol$Position - vol$Cost
+vol$Excess[is.na(vol$Excess)] <- 0
+cumsum(vol$Excess %>% na.omit) %>% plot
+strategy_performance(vol$Excess, vol$Date) %>% unlist
+}
+
+# Volatiliy spread
+{
+  vol <- merge(BackAdj$ES, BackAdj$YM, by="Date")
+  vol$Close <- (vol$Close.x - vol$Close.y )%>% na.locf(na.rm=F)
+  vol$Return <- vol$Return.x - vol$Return.y
+  vol$Volatility <- calculate_volatility(vol$Return)
+  vol$Position <- 0.4 / vol$Volatility
+  cost <- 0.00
+  d <- BBands(vol$Close, 32, maType = SMA, sd = 2)
+  vol$Trade <- 0
+  vol$Cost <- 0
+  for(i in 2:nrow(vol)) {
+    vol$Trade[i] <- vol$Trade[i-1]
+    if(d[i,2] %>% is.na) next;
+    if(vol$Trade[i] == 0) {
+      if(vol$Close[i] < d[i,1]) {
+        vol$Trade[i] <- 1; 
+        vol$Cost[i] <- cost 
+      }
+      if(vol$Close[i] > d[i,3]) {
+        vol$Trade[i] <- -1; 
+        vol$Cost[i] <- cost
+      }
+    } else {
+      if(vol$Trade[i] == 1 & vol$Close[i] > d[i,2]) 
+        vol$Trade[i] <- 0; 
+      if(vol$Trade[i] == -1 & vol$Close[i] < d[i,2]) 
+        vol$Trade[i] <- 0;
+    }
+  }
+  vol$Trade <- lag(vol$Trade)
+  vol$Cost <- lag(vol$Cost)
+  i <- 250
+  f <- tail(vol, i)
+  plot(f$Close, col=f$Trade+2, pch=16, cex=2 )
+  lines(f$Close, col="gray")
+  matplot2(d[,1:3] %>% tail(i), add=T)
+  vol$Excess <- vol$Return * vol$Trade * vol$Position - vol$Cost
+  vol$Excess[is.na(vol$Excess)] <- 0
+  cumsum(vol$Excess %>% na.omit) %>% plot
+  strategy_performance(vol$Excess, vol$Date) %>% unlist
+}
+
+

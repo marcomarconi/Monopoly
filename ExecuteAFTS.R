@@ -51,6 +51,7 @@
     # # load intra-day data
     system(paste("cat", paste(list.files(symbol_dir, pattern = "intraday", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
     df_intraday <- fread("_tmp", header= FALSE)
+    file.remove("_tmp")
     colnames(df_intraday) <- c("Date", "Close")
     df_intraday$Date <- as_datetime(df_intraday$Date)
     df_intraday <- arrange(df_intraday, Date)
@@ -135,26 +136,26 @@
   cap_forecast <- function(x, cap=20) {
     return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
   }
-  multiple_EMA <- function(adjclose, close, risk, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
+  multiple_EMA <- function(adjclose, close, volatility, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
     n <- length(spans)
     EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
-    EWMACs <- lapply(1:n, function(i) EWMACs[[i]] / (close * risk / sqrt(period)) * scalars[i] )
+    EWMACs <- lapply(1:n, function(i) EWMACs[[i]] / (close * volatility / sqrt(period)) * scalars[i] )
     EWMACs <- lapply(1:n, function(i) cap_forecast(EWMACs[[i]], cap))
     forecast <- rowMeans(do.call(cbind, EWMACs))
     return(forecast)
   }
-  multiple_AS <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504), scalars=c(28.53, 49.09, 68.99, 97.00, 136.61), cap=20, period=252) {
+  multiple_AS <- function(adjclose, close, volatility, spans=c(21, 63, 126, 252, 504), scalars=c(28.53, 49.09, 68.99, 97.00, 136.61), cap=20, period=252) {
     n <- length(spans)
     ASs <- lapply(1:n, function(i) AbsoluteStrength(adjclose, spans[i]))
-    ASs <- lapply(1:n, function(i) ASs[[i]] / (close * risk / sqrt(period)) * scalars[i] )
+    ASs <- lapply(1:n, function(i) ASs[[i]] / (close * volatility / sqrt(period)) * scalars[i] )
     ASs <- lapply(1:n, function(i) cap_forecast(ASs[[i]], cap))
     forecast <- rowMeans(do.call(cbind, ASs))
     return(forecast)
   }
-  multiple_DC <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504), scalars=c(31.2, 33.4, 34.3, 34.9, 35.3), cap=20, period=252) {
+  multiple_DC <- function(adjclose, close, volatility, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
-    DCs <- lapply(1:n, function(i) DCs[[i]] * scalars[i] )
+    DCs <- lapply(1:n, function(i) EMA(na.locf(DCs[[i]], na.rm=F) * 40, spans[i]/4) * scalars[i] )
     DCs <- lapply(1:n, function(i) cap_forecast(DCs[[i]], cap))
     forecast <- rowMeans(do.call(cbind, DCs))
     return(forecast)
@@ -179,10 +180,10 @@
     return(cbind(value=value, velocity=velocity, distance=distance, error=error))
   }
   
-  multiple_KF <- function(adjclose, close, risk, spans=c(0.5, 1, 2, 5, 10), scalars=c(66, 55, 46, 37, 31), cap=20, period=252) {
+  multiple_KF <- function(adjclose, close, volatility, spans=c(0.5, 1, 2, 5, 10), scalars=c(66, 55, 46, 37, 31), cap=20, period=252) {
     n <- length(spans)
     KFs <- lapply(1:n, function(i) KalmanFilterIndicator(adjclose, sharpness = 1, K = spans[i])[,2])
-    KFs <- lapply(1:n, function(i) KFs[[i]] / ((close * risk / sqrt(period))) * scalars[i] )
+    KFs <- lapply(1:n, function(i) KFs[[i]] / ((close * volatility / sqrt(period))) * scalars[i] )
     KFs <- lapply(1:n, function(i) cap_forecast(KFs[[i]], cap))
     forecast <- rowMeans(do.call(cbind, KFs))
     return(forecast)
@@ -193,16 +194,16 @@
     pos_count <- runSum(diff>0, floor(P/2))
     return(400 * (pos_count) / P - 100)
   }
-  multiple_TII <- function(adjclose, close, risk, spans=c(21, 63, 126, 252)) {
+  multiple_TII <- function(adjclose, close, volatility, spans=c(21, 63, 126, 252)) {
     n <- length(spans)
     TII <- lapply(1:n, function(i) TII(adjclose, P = spans[i]) / 5)
     forecast <- rowMeans(do.call(cbind, TII))
     return(forecast)
   }
-  # basis and risk are in percentage
-  multiple_Carry <- function(basis, expiry_difference, risk, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
+  # basis and volatility are in percentage
+  multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
     n <- length(spans)
-    Carry <- (basis / (expiry_difference / expiry_span)) / ( risk )
+    Carry <- (basis / (expiry_difference / expiry_span)) / ( volatility )
     Carry <- na.locf(Carry, na.rm=FALSE); Carry[is.na(Carry)] <- 0
     EMAs <- lapply(1:n, function(i) EMA(Carry, spans[i]) * scalar)
     EMAs <- lapply(1:n, function(i)  cap_forecast(EMAs[[i]], cap))
@@ -230,7 +231,7 @@
     forecast <- rowMeans(do.call(cbind, Os))
     return(forecast)
   }
-  returns_skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
+  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
     Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skewness,  fill=NA, align="right"))
@@ -366,7 +367,7 @@
 
 # Parameters (maybe put them in a config file?)
 {
-  main_dir <- "/home/marco/trading/Systems/Monopoly/Execution/"
+  main_dir <- "/home/marco/trading/Systems/Monopoly/ExecuteATFS/"
   positions_file <- paste0(main_dir, "POSITIONS.csv")
   instrument_file <- paste0(main_dir, "INSTRUMENTS.csv")
   FX_file <- paste0(main_dir, "FX.csv")
@@ -385,7 +386,7 @@
   corr_length <- 25
   portfolio_buffering_level <- 0.1
   position_buffering_level <- 0.25
-  trade_shadow_cost <- 0
+  trade_shadow_cost <- 10
 }
 
 
@@ -475,7 +476,7 @@ if(capital <= 0 | is.na(capital))
   closes <- lapply(instruments_data, function(x)x[[1]] %>% select(Date, Close))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
   colnames(closes_merged) <- c("Date", names(instruments_data))
-  daily_returns <- data.frame(Date=closes_merged$Date, apply(closes_merged[,-1], 2, function(x) c(0, diff(log(x)))))
+  daily_returns <- data.frame(Date=as.Date(closes_merged$Date), apply(closes_merged[,-1], 2, function(x) c(0, diff(log(x)))))
   daily_returns <- na.omit(daily_returns) # Potentially dangerous?
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
@@ -484,7 +485,6 @@ if(capital <= 0 | is.na(capital))
   cor_matrix <- Q[[length(Q)]] # running corr matrix
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
-  
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
 
   # iterate over data and calculate positions
@@ -527,7 +527,11 @@ if(capital <= 0 | is.na(capital))
     # df$M <- EMA(2 - 1.5 * df$Q, 10)
     }
     # Trend-following (strategy 9)
-    df$ForecastTrend <- rowMeans(do.call(cbind, lapply(list(multiple_EMA, multiple_DC, multiple_KF, multiple_TII), function(f) f(df$Close, df$Close, df$Volatility))))
+    df$multiple_EMA <- multiple_EMA(df$Close, df$Close, df$Volatility)
+    df$multiple_DC <- multiple_DC(df$Close, df$Close, df$Volatility)
+    df$multiple_KF <- multiple_KF(df$Close, df$Close, df$Volatility)
+    df$multiple_TII <- multiple_TII(df$Close, df$Close, df$Volatility)
+    df$ForecastTrend <- rowMeans(cbind(df$multiple_EMA, df$multiple_DC, df$multiple_KF, df$multiple_TII), na.rm=T)
     df$ForecastTrend <- cap_forecast(df$ForecastTrend * FDMtrend) 
     
     # Carry 
@@ -549,7 +553,7 @@ if(capital <= 0 | is.na(capital))
     df$ForecastCarry <- cap_forecast(df$ForecastCarry * FDMcarry)
     
     # Skewness (strategy 24)
-    df$ForecastSkew <- returns_skew(df$Return) 
+    df$ForecastSkew <- multiple_Skew(df$Return) 
     df$ForecastSkew <- cap_forecast(df$ForecastSkew * FDMskew)
     
     # Final trade
@@ -626,7 +630,7 @@ if(capital <= 0 | is.na(capital))
   # Active positions
   print(paste("Active positions:", sum(today_trading$Position != 0), "total symbols:", nrow(today_trading)))
   print("Positions to update:")
-  trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast)
+  trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(trades, n=nrow(trades))
   
   # Write to file

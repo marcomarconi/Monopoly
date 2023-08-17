@@ -794,10 +794,10 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, ASs))
     return(forecast)
   }
-  multiple_DC <- function(adjclose, close, risk, spans=c(21, 63, 126, 252, 504), scalars=c(31.2, 33.4, 34.3, 34.9, 35.3), cap=20, period=252) {
+  multiple_DC <- function(adjclose, close, risk, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
-    DCs <- lapply(1:n, function(i) DCs[[i]] * scalars[i] )
+    DCs <- lapply(1:n, function(i) EMA(na.locf(DCs[[i]], na.rm=F) * 40, spans[i]/4) * scalars[i] )
     DCs <- lapply(1:n, function(i) ifelse(DCs[[i]] > cap, cap, ifelse(DCs[[i]] < -cap, -cap, DCs[[i]] ) ))
     forecast <- rowMeans(do.call(cbind, DCs))
     return(forecast)
@@ -1010,8 +1010,14 @@ print(res$Aggregate %>% unlist)
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
-      forecast <- 0#rollapply(df$Return, width=120, tail_ratio, fill=NA, align="right") - rollapply(df$Return, width=2520, tail_ratio, fill=NA, align="right")
-      df$ForecastTest <-   cap_forecast(forecast * 1)
+      if(weights[["Test"]]  > 0) {
+        logitm <- 30; logitr <- 25
+        rsi <- multiple_RSI(df$Close%>% na.locf(na.rm=F)) / 20
+        rsi <- -((invlogit(logitm*rsi-logitr) + invlogit(logitm*rsi+25))-1) * 20
+        forecast <- EMA(rsi , 5)     
+        forecast <- multiple_RSI(df$Close%>% na.locf(na.rm=F))
+        df$ForecastTest <-   forecast
+      }   
       
       {  # Tests
       # # Kurtosis
@@ -1121,47 +1127,11 @@ print(res$Aggregate %>% unlist)
 
 
 
-
-## Stategy Tailratio
-{
-  
-  # Jumbo
-  {
-    jumbo <- list()
-    IDM = 2.41
-    FDM <- 1.39
-    for(n in names(BackAdj)) {
-      print(n)
-      df <- BackAdj[[n]]
-      df$Date <- as.Date(df$Date)
-      df$Volatility = calculate_volatility(df$Return)
-      df$Position = lag(target_vol / df$Volatility)
-      df$Return[is.na(df$Return)] <- 0
-      df$Tailratio1 <- rollapply(df$Return, width=60, tailratio,  fill=NA, align="right")
-      df$Tailratio2 <- rollapply(df$Return, width=120, tailratio, fill=NA, align="right")
-      df$Tailratio3 <- rollapply(df$Return, width=240, tailratio, fill=NA, align="right")
-      df$Tailratio1 <- EMA(na.locf(df$Tailratio1, na.rm = FALSE), 60/4) * * 42.66
-      df$Tailratio2 <- EMA(na.locf(df$Tailratio2, na.rm = FALSE), 120/4) * 64.3 
-      df$Tailratio3 <- EMA(na.locf(df$Tailratio3, na.rm = FALSE), 240/4) * 89.1
-      df$Tailratio1 <- cap_forecast(df$Tailratio1)
-      df$Tailratio2 <- cap_forecast(df$Tailratio2)
-      df$Tailratio3 <- cap_forecast(df$Tailratio3)
-      df$Tailratio <- rowMeans(cbind(df$Tailratio1, df$Tailratio2, df$Tailratio3), na.rm=TRUE)
-      df$Trade <- lag(df$Tailratio / 10)
-      df$Excess <- df$Return * df$Position * df$Trade * IDM 
-      jumbo[[n]] <- select(df, Date, Excess)
-    }
-    portfolio <- merge_portfolio_list(jumbo)
-    res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE, benchmark.dates = benchmark.dates, benchmark.returns = benchmark.returns ) 
-    print(res$Aggregate %>% unlist)
-  }
-}
-
 ## Carver post on Skew/Kurtosis
 # https://qoppac.blogspot.com/2019/10/skew-and-expected-returns.html
 # General plotting by symbol
-func <- tail_ratio
-Assets <- BackAdj
+func <- carver_ratio2
+Assets <- Symbols_D1_barchart
 res <- list()
 for(symbol in names(Assets)) {
   print(symbol)
@@ -1174,20 +1144,22 @@ full <- do.call(cbind, res)
 full <- full[,order(colMedians(full, na.rm=T))]
 boxplot(full, las=2, cex.axis=0.75); abline(h=0)
 # Global plot feature vs return
-func <- tail_ratio
+func <- carver_ratio
 a <- lapply(Assets, function(df){x <- na.omit(df$Return); r <- na.omit(df$Return); c(func(x), mean(r))}) %>% do.call(rbind,.)
 plot(a, type="n"); text(a[,1], a[,2], rownames(a));abline(h=0)
 a <- lapply(Assets, function(df){x <- na.omit(df$Return); r <- na.omit(df$Return); c(func(x), mean(r)/sd(r)*16)}) %>% do.call(rbind,.)
 rownames(a) <- sapply(Assets, function(x)x$Name[1])
-plot(a, type="n"); text(a[,1], a[,2], rownames(a));abline(h=0)
+plot(a, type="n" ); text(a[,1], a[,2], rownames(a));abline(h=0)
 # Rolling skew vs adjusted returns
-func <- tail_ratio
+func <- carver_ratio2
+# this is to calculate 10 years long rolling values
 assets_long_term_values <- list()
 for(symbol in names(Assets)) {
   df <- Assets[[symbol]] 
   assets_long_term_values[[symbol]] <- data.frame(Date=as.Date(df$Date), 
                                                   long_term_values=rollapply(df$Return, width=2520, func, fill=NA, align="right"))
 }
+# merge them and get the 10 years long average of all assets. To be used later 
 full_long_term <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), assets_long_term_values) %>% arrange(Date)
 colnames(full_long_term) <- c("Date", names(Assets))
 long_term_cs <- data.frame(Date=full_long_term[,1], LTCS=rowMedians(full_long_term[,-1] %>% as.matrix(), na.rm = T))
@@ -1203,8 +1175,9 @@ for(freqs in c("10", "20", "60", "120", "250", "500")){
     return <- df$Return
     return[is.na(return)] <- 0
     date <- as.Date(df$Date)
-    long_term_values <- assets_long_term_values[[symbol]][,2]
-    values <- rollapply(x, width=freq, func, fill=NA, align="right") 
+    long_term_values <- 0#assets_long_term_values[[symbol]][,2]
+    #values <- rollapply(x, width=freq, func, fill=NA, align="right") 
+    values <- func(return, n=freq) 
     means <- runMean(return, freq)
     vols <- runSD(return, freq)
     means <- lead(means, freq)
@@ -1213,7 +1186,7 @@ for(freqs in c("10", "20", "60", "120", "250", "500")){
   }  
   res_func[[freqs]]  <- data.frame(f=freq, res_func[[freqs]])
 }
-full <- do.call(rbind, res_tail_ratio_futures)
+full <- do.call(rbind, res_func)
 # full <- group_by(full, f, symbol) %>% 
 #   summarise(f=f, symbol=symbol, date=as.Date(date),means=means, vols=vols, values=values, total_avg=median(values, na.rm=T), moving_values = AbsoluteStrength(values %>% na.locf(na.rm=F), f))
 full <- merge(full, long_term_cs, by="Date")
@@ -1225,7 +1198,7 @@ full$Cond_ts <- full$Values > full$LTV
 # Relative to the current cross sectional average across all assets 
 full$Cond_cs <- full$Values > full$LTCS
 # Choose one
-full$h <- full$Cond_ts
+full$h <- full$Cond_abs
 #full <- filter(full, !is.na(h))
 a <- full %>% filter(!is.na(h)) %>% group_by(f, h) %>% summarize(SR_m=median(SR, na.rm=T), SR_s=mad(SR, na.rm=T)/sqrt(n()))
 ggplot(a ) + geom_line(aes(f, SR_m, color=h)) +  geom_errorbar(aes(f, y=SR_m, ymin=SR_m-SR_s, ymax=SR_m+SR_s, color=h)) + theme(text = element_text(size=32))
