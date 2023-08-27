@@ -389,26 +389,27 @@ print(res$Aggregate %>% unlist)
   # Figure 46
   # I don't observe the same mean-reverting phenomenon at EMWA2
   jumbo <- list()
-  f <- 2
+  f <- 4
   hs <- c(98.5, 50.2, 25.4, 13.4, 7.6, 5.2)
-  h <- hs[1]
+  h <- hs[2]
   h <- ceiling(252/h)
-  scalar <- 12.1
+  scalar <- 8.53
   for(n in names(BackAdj)) {
     df <- BackAdj[[n]]
     df$Return[is.na(df$Return)] <- 0
     df$Volatility = calculate_volatility(df$Return)
     df$Trend <- EMA(df$AdjClose, f) -  EMA(df$AdjClose, f*4)
     df$Forecast <- df$Trend / (df$Close * df$Volatility / 16) * scalar
-    #df$Forecast <- ifelse(df$Forecast > 20, 20, ifelse(df$Forecast < -20, -20, df$Forecast )) 
+    df$Forecast <- ifelse(df$Forecast > 20, 20, ifelse(df$Forecast < -20, -20, df$Forecast )) 
     for(i in 1:nrow(df)) {
       df$FR[i] <- df$Forecast[i]
-      df$NR[i] <- mean(df$Return[(i+1):(i+1+h)], na.rm=TRUE) / (df$Volatility[i] / 16) 
+      df$NR[i] <- mean(df$Return[(i+1):(i+h)], na.rm=TRUE) / (df$Volatility[i] / 16) 
     }
     jumbo[[n]] <- select(df, FR, NR)
   }
   res <- do.call(rbind, jumbo)
-  a <- group_by(res %>% filter(between(FR, -30, 30)), bin=cut(FR, 15)) %>% summarize(M=median(NR, na.rm=TRUE), S=2*(sd(NR, na.rm=TRUE))/sqrt(n())) 
+  a <- group_by(res %>% filter(between(FR, -20, 20)), bin=cut(FR, 10)) %>% 
+    summarize(M=median(NR, na.rm=TRUE), S=2*(mad(NR, na.rm=TRUE))/sqrt(n())) 
   ggplot(a)+geom_errorbar(aes(bin, ymin=M-S, ymax=M+S))+geom_hline(yintercept = 0)
    
 }

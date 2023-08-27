@@ -53,7 +53,7 @@
     df_intraday <- fread("_tmp", header= FALSE)
     file.remove("_tmp")
     colnames(df_intraday) <- c("Date", "Close")
-    df_intraday$Date <- as_datetime(df_intraday$Date)
+    df_intraday$Date <- as_date(df_intraday$Date)
     df_intraday <- arrange(df_intraday, Date)
     df_intraday <- tail(df_intraday, 1)
     # # load daily data, lag date by one day
@@ -73,7 +73,7 @@
     colnames(df_daily) <- c("Date", "Close")
     df_daily <- arrange(df_daily, Date)
     if(lagged) 
-      df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
+      df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == "Fri", Date+2, Date+1  ))))
     # only keep daily data up to the last element of intradaily data
     df_daily <-  dplyr::filter(df_daily, Date < df_intraday$Date[1])
     # load weekly data, lag date by two days
@@ -112,8 +112,8 @@
     df_daily$Period <- "Daily"
     df_weekly$Period <- "Weekly"
     df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>%
-      arrange(Date) %>% mutate(Date=as_datetime(Date))
-    df <- rbind(df, tail(df_intraday, 1)) %>% mutate(Date=as.Date(Date))
+      arrange(Date) 
+    df <- rbind(df, mutate(df_intraday, Date=as_date(Date))) %>% mutate(Date=as.Date(Date))
     # load last holding cost
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
@@ -123,10 +123,12 @@
     } else {
       hc <- unlist(f[,-1])
     }
+    if((length(unique(df$Date)) != length(df$Date)))
+      stop(paste("Duplicate dates in ", symbol))
     return(list("Price"=df, "HC"=hc))
   }
   
-  calculate_volatility <- function(returns, long_span=252, short_span=35,  weights=c(0.3, 0.7), period=252){
+  calculate_volatility <- function(returns, long_span=252, short_span=32,  weights=c(0.3, 0.7), period=252){
     vol_short <- sqrt(EMA(replace(returns, is.na(returns), 0)^2, short_span))
     vol_long <- runMean(vol_short, long_span)
     vol <-  (weights[1] * vol_long + weights[2] * vol_short) * sqrt(period) # one year instead of ten
