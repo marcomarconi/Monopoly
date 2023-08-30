@@ -1,0 +1,145 @@
+## A collection of scraping functions, write a separate bash script to execute them
+
+# Download futures contracts
+start_month=5
+year=2023
+months=(jan feb mar apr may jun jul aug sep oct nov dec)
+months_codes=(f g h j k m n q u v x z)
+while IFS=, read -r w1 w2; do
+ #f=`sed 's/,/-/g' <<< $f `;
+ echo $w1 $w2
+ for i in $(seq $start_month 12); do
+  m=${months[$((i-1))]}
+  c=${months_codes[$((i-1))]}
+  f=$w1"-"$m"-"$year
+  echo $f
+  scrape=_scrape.$f.html
+  echo $scrape
+  wget -q https://www.cmcmarkets.com/en-gb/instruments/$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/MONTH/6?key=$apikey" -O "_"$f.txt
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_"$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $f.csv
+  if [ ! -s $f.csv ] ; then rm $f.csv; fi
+  rm "_"$f.txt _scrape.$f.html
+  if [ -s $f.csv ] ; then cp $f.csv $w2/$w2$c${year:2:4}.csv; fi
+ done 
+ break
+done < CMC_INSTRUMENTS.csv 
+
+
+### UK version
+# Download cash contracts
+today=`date +"%Y%m%d"`
+today_dash=`date +"%Y-%m-%d"`
+# Download cash contracts
+while IFS=, read -r w1 w2 w3; do
+  if [ ! -d $w2 ]; then mkdir $w2; fi
+  if [ "$w3" != "CMC" ]; then continue; fi
+  echo $w1 $w2 $3
+  f=$w1
+  scrape=_scrape.$f.html
+  wget -q https://www.cmcmarkets.com/en-gb/instruments/$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/MONTH/5?key=$apikey" -O "_month."$f.txt
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/YEAR/5?key=$apikey" -O "_year."$f.txt
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_month."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.month
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_year."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.year 
+  wget https://ws.cmcmarkets.com/json/instruments/$apicode"_gb.json" -q -O "_"$f.json
+  grep .yearlyPercentageBuy.*tradingHours "_"$f.json  -o | sed -e 's/},"tradingHours//' -e 's/"[^"]*"://g' -e 's/"RECEIVED"/1/g' -e 's/"CHARGED"/-1/g' | awk -F ","  -v d=$today_dash '{print d","$1*$2","$3*$4}' > $today.$f.holding_cost
+  rm "_month."$f.txt "_year."$f.txt _scrape.$f.html 
+  mv $today.$f.month $w2/$today.$w2.daily
+  mv $today.$f.year $w2/$today.$w2.weekly
+  mv $today.$f.holding_cost $w2/$today.$w2.holding_cost
+done < INSTRUMENTS.csv 
+
+# Download specific instrument from yahoo
+today=`date +"%Y%m%d"`
+today_dash=`date +"%Y-%m-%d"`
+start=1009843200
+end=`date +"%s"`
+while IFS=, read -r w1 w2 w3 w4 w5; do
+  if [ ! -d $w2 ]; then mkdir $w2; fi
+  if [ "$w3" != "yahoo" ]; then continue; fi
+  echo $w1 $w2 $w3
+  f=$w1
+  scrape=_scrape.$f.html
+  curl "https://query1.finance.yahoo.com/v7/finance/download/$f?period1="$start"&period2="$end"&interval=1d&events=history&includeAdjustedClose=true" > $scrape
+  sed -i 's/null/NA/g' $scrape
+  cut -f 1,6 -d "," $scrape | tail -n +2 > $w2/$today.$w2.daily
+  head -n 2 $w2/$today.$w2.daily > $w2/$today.$w2.weekly # fake weekly data
+  echo "$today_dash,w4,w5" > $w2/$today.$w2.holding_cost
+done < INSTRUMENTS.csv   
+
+### SPANISH version
+# Download cash contracts
+today=`date +"%Y%m%d"`
+today_dash=`date +"%Y-%m-%d"`
+apikey="f9a22832202e456b3dd66d9432a97ab4e98bea1eaodutjiq63"
+# Download cash contracts
+while IFS=, read -r w1 w2; do
+  if [ ! -d $w2 ]; then mkdir $w2; fi
+  echo $w1 $w2
+  f=$w1
+  scrape=_scrape.$f.html
+  wget -q https://www.cmcmarkets.com/es-es/instrumentos/$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`  
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/MONTH/5?key=$apikey" -O "_month."$f.txt
+  wget -q "https://ws.cmcmarkets.com/instruments/prices/$apicode/YEAR/5?key=$apikey" -O "_year."$f.txt
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_month."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.month
+  sed -e 's/},{/\n/g' -e 's/"[chlot]"://g' -e 's/\[{//g'  -e 's/}\]//g' -e  's/T[^Z]*Z//g' -e 's/"//g' "_year."$f.txt  | cut -f 1,5 -d ","  | awk -F "," '{print $2","$1}'  > $today.$f.year 
+  wget https://ws.cmcmarkets.com/json/instruments/$apicode"_gb.json" -q -O "_"$f.json
+  grep .yearlyPercentageBuy.*tradingHours "_"$f.json  -o | sed -e 's/},"tradingHours//' -e 's/"[^"]*"://g' -e 's/"RECEIVED"/1/g' -e 's/"CHARGED"/-1/g' | awk -F ","  -v d=$today_dash '{print d","$1*$2","$3*$4}' > $today.$f.holding_cost
+  rm "_month."$f.txt "_year."$f.txt _scrape.$f.html 
+  mv $today.$f.month $w2/$today.$w2.daily
+  mv $today.$f.year $w2/$today.$w2.weekly
+  mv $today.$f.holding_cost $w2/$today.$w2.holding_cost
+done < INSTRUMENTS.csv 
+
+# Scrape price decimals
+ while IFS=, read -r w1 w2 w3 w4 w5 w6; do   
+    f=$w1
+  scrape=_scrape.$f.html;   
+  wget -q "https://www.cmcmarkets.com/en-gb/instruments/"$f -O $scrape;   
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`;   
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json;   
+grep priceNumberOfDecimals.*minimumSpread "_"$f.json -o | sed 's/,"minimumSpread//' | sed 's/":/ /'
+done <<< `tail -n+2 INSTRUMENTS.csv` 
+
+
+
+### Scrape forex holding costs, provide a file withe the list of pairs, like "eur-usd", without quotes
+while IFS=, read -r w1; do
+  f=$w1
+  echo $f
+  # we scrape the main symbol page, where we can fine the apicode and the apikey
+  scrape=_scrape.$f.html
+  wget -q "https://www.cmcmarkets.com/en-gb/instruments/"$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  # download the "hidden" json file, where we can find the holding costs
+  wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json
+  grep .yearlyPercentageBuy.*tradingHours "_"$f.json  -o | sed -e 's/},"tradingHours//' -e 's/"[^"]*"://g' -e 's/"//g' | awk -F ","  -v f=$f ' function abs(v) {return v < 0 ? -v : v}  {if($2 == "CHARGED") b=-abs($1); else b=abs($1); if($4 == "CHARGED") s=-abs($3); else s=abs($3); print f,","b,",",s}'  > $f.holding_cost 
+
+done < fx_pairs.txt
+
+
+### Scrape forex last price, minimum spread and spread. Provide a file withe the list of pairs, like "eur-usd", without quotes
+while IFS=, read -r f; do
+  # we scrape the main symbol page, where we can fine the apicode and the apikey
+  scrape=_scrape.$f.html
+  wget -q "https://www.cmcmarkets.com/en-gb/instruments/"$f -O $scrape;
+  apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
+  apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
+  # download the "hidden" json file
+  wget "https://ws.cmcmarkets.com/instruments/price/"$apicode"?key="$apikey -q -O "_"$f.price
+  price=`grep "buy.*movement_percentage" -o "_"$f.price | sed 's/buy":\([0-9\.]*\),"sell":\([0-9\.]*\),"decimal_places":\([0-9\.]*\),"points_multiplier":\([0-9\.]*\),"movement_percentage/\1,\2,\3,\4/'`
+  wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json
+  grep priceNumberOfDecimals.*minimumSpread.*api_code "_"$f.json  -o | sed 's/priceNumberOfDecimals":\([0-9]\),"minimumSpread":\([^,]*\),"api_code/'$f','$price',\2/'  
+done < fx_pairs.txt
+
+
+
+

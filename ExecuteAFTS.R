@@ -394,8 +394,6 @@
 
 # Execute
 args = commandArgs(trailingOnly=TRUE)
-# recent lines of data to ignore, in case you skipped a day
-capital <- 0
 if(length(args) == 1) {
   capital <- as.numeric(args[1])  
 }else{
