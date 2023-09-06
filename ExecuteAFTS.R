@@ -10,40 +10,15 @@
   suppressMessages(library(moments))
   suppressMessages(library(ggthemes))
   suppressMessages(library(data.table))
+  source("/home/marco/trading/Systems/Common/RiskManagement.R")
+  
 }
 
 
 
 # Functions
 {
-  decimalplaces <- function(x) {
-    if ((x %% 1) != 0) {
-      nchar(strsplit(sub('0+$', '', format(x, scientific = FALSE)), ".", fixed=TRUE)[[1]][[2]])
-    } else {
-      return(0)
-    }
-  }
-  
-  round_position <- function(position, min_position, position_tick) {
-    return(ifelse(abs(position) < min_position,  0, round(position, sapply(position_tick, decimalplaces ))))
-  }
-  
-  runCorMatrix <- function(M, n=25) {
-    nas <- lapply(1:(n-1), function(i)matrix(NA, nrow = ncol(M), ncol = ncol(M)))
-    run_corr_matrices <- lapply(n:nrow(M), function(i) cor(M[(i-n):i,], use="pairwise.complete.obs"))
-    run_corr_matrices <- c(nas, run_corr_matrices)
-    run_corr_vectors <- lapply(run_corr_matrices, as.vector) 
-    corr_by_date <- do.call(cbind, run_corr_vectors)
-    ema_corr_by_date <- apply(corr_by_date, 1, EMA, n) %>% t 
-    Q <- lapply(1:ncol(ema_corr_by_date), 
-                function(i) matrix(ema_corr_by_date[,i], ncol=ncol(M), dimnames = list(colnames(M), colnames(M))))
-    return(Q)
-  }
 
-
-
-  
-  
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
   load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
@@ -127,17 +102,7 @@
       stop(paste("Duplicate dates in ", symbol))
     return(list("Price"=df, "HC"=hc))
   }
-  
-  calculate_volatility <- function(returns, long_span=252, short_span=32,  weights=c(0.3, 0.7), period=252){
-    vol_short <- sqrt(EMA(replace(returns, is.na(returns), 0)^2, short_span))
-    vol_long <- runMean(vol_short, long_span)
-    vol <-  (weights[1] * vol_long + weights[2] * vol_short) * sqrt(period) # one year instead of ten
-    return(vol)
-  }
-  
-  cap_forecast <- function(x, cap=20) {
-    return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
-  }
+
   multiple_EMA <- function(adjclose, close, volatility, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
     n <- length(spans)
     EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
@@ -146,14 +111,8 @@
     forecast <- rowMeans(do.call(cbind, EWMACs))
     return(forecast)
   }
-  multiple_AS <- function(adjclose, close, volatility, spans=c(21, 63, 126, 252, 504), scalars=c(28.53, 49.09, 68.99, 97.00, 136.61), cap=20, period=252) {
-    n <- length(spans)
-    ASs <- lapply(1:n, function(i) AbsoluteStrength(adjclose, spans[i]))
-    ASs <- lapply(1:n, function(i) ASs[[i]] / (close * volatility / sqrt(period)) * scalars[i] )
-    ASs <- lapply(1:n, function(i) cap_forecast(ASs[[i]], cap))
-    forecast <- rowMeans(do.call(cbind, ASs))
-    return(forecast)
-  }
+
+  
   multiple_DC <- function(adjclose, close, volatility, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
@@ -181,7 +140,6 @@
     }
     return(cbind(value=value, velocity=velocity, distance=distance, error=error))
   }
-  
   multiple_KF <- function(adjclose, close, volatility, spans=c(0.5, 1, 2, 5, 10), scalars=c(66, 55, 46, 37, 31), cap=20, period=252) {
     n <- length(spans)
     KFs <- lapply(1:n, function(i) KalmanFilterIndicator(adjclose, sharpness = 1, K = spans[i])[,2])
@@ -190,6 +148,7 @@
     forecast <- rowMeans(do.call(cbind, KFs))
     return(forecast)
   }
+  
   TII <- function(x, P = 60, ma=TTR::EMA) {
     ma_p <- ma(x, P)
     diff <- x - ma_p
@@ -202,6 +161,7 @@
     forecast <- rowMeans(do.call(cbind, TII))
     return(forecast)
   }
+  
   # basis and volatility are in percentage
   multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
     n <- length(spans)
@@ -212,27 +172,11 @@
     forecast <- rowMeans(do.call(cbind, EMAs))
     return(forecast)
   }
+  
   relative_volatility <- function(volatility, period=2520) {
     return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
   }
-  normalize_price <- function(adjclose, close, volatility, period=252) {
-    np <- rep(NA, length(close))
-    np[1] <- 0
-    for(i in 2:length(close)) {
-      np[i] <-  (100 * (adjclose[i] - adjclose[i-1]) / (close[i] * volatility[i] / sqrt(period))) + np[i-1]
-      if(is.na(np[i]))
-        np[i] <- np[i-1]
-    }
-    return(np)
-  }
-  cross_sectional_momentum <- function(instrument_np, class_np, spans=c(20, 40, 80, 160, 320), scalars=c(108.5, 153.5, 217.1, 296.8, 376.3)) {
-    n <- length(spans)
-    relative_np  <- (instrument_np - class_np) / 100
-    Os <- lapply(1:n, function(i) EMA(c(rep(NA, spans[i]), diff(relative_np, lag=spans[i]) / spans[i]), ceiling(spans[i]/4)) * scalars[i])
-    Os <- lapply(1:n, function(i) ifelse(Os[[i]] > cap, cap, ifelse(Os[[i]] < -cap, -cap, Os[[i]] ) ))
-    forecast <- rowMeans(do.call(cbind, Os))
-    return(forecast)
-  }
+
   multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
@@ -246,124 +190,6 @@
   
 
   
-  ## Greedy algorithm to find a set of positions closest to the optimal provided. Adapted from "Advanced futures trading strategies (2022)".
-  ## refer to the book for details. 
-  # capital : your money in your account currency
-  # optimal_positions : vector of the best un-rounded positions (in contracts) corresponding to your forecast. 
-  #                     Forecasts are usually from -20 (max short position) to 20. Optimal positions in contracts are calculated as following:
-  #                     (capital * instrument_weight * IDM  * target_volatility / instrument_volatility  * FX_rate * Forecast/10) / (contract_size * price) 
-  # notional_exposures : vector of the values in account currency of one contract (usually contract_size * price / FX_rate)
-  # cov_matrix : covariance matrix of instruments returns, usually calculated from the last 6 months of (daily or weekly) returns.
-  # previous_position : vector of the previous optimal positions. All zeroes if not provided.
-  # max_positions : vector of the max allowed positions (in absolute contracts), usually corresponding to a forecast of 20 (see above formula). Ignored if NULL
-  # min_positions : vector of the min allowed positions (in absolute contracts). If NULL, it is set to the minimum incremental step (1 contract for futures).
-  # costs_per_contract : vector of the costs to trade one contract, in price scale. 
-  # trade_shadow_cost : a factor multiplier of the cost per contracts.
-  # fractional : TRUE is your broker allow fractional contracts, like for CFDs. The algorithm will use the decimal part of the positions as incremental step 
-  #              in the greedy algorithm. If you are trading futures where all contracts are 1, just set it to FALSE.
-  # max_factor : maximum multiple of optimal position allowed (e.g. if optimal position == 2 and max_factor == 2, the optimized position will be <= 4). 
-  #
-  # returned value: a vector of optimized positions according to the dynamic portfolio algorithm.
-  dynamic_portfolio <- function(capital, optimal_positions, notional_exposures, cov_matrix, 
-                                previous_position = NULL, min_positions=NULL, max_positions=NULL, costs_per_contract = NULL, trade_shadow_cost = 1, fractional=TRUE, max_factor=2) {
-    # Calculate the cost of making trades. trade_shadow_cost represents the number of expected trades in year
-    calculate_costs <- function(weights) {
-      trade_gap <- abs(weights_previous - weights)
-      trade_costs <- trade_shadow_cost * sum(trade_gap * costs_per_trade_in_weight)
-      return(trade_costs)
-    }
-    # Calculate the error of given weights from the optimal weights considering instruments correlations, plus optional costs
-    evaluate <- function(weights_optimal, weights, cov_matrix) {
-      solution_gap <- weights_optimal - weights
-      track_error <- as.numeric(sqrt(t(solution_gap) %*% cov_matrix %*% solution_gap))
-      trade_costs <- calculate_costs(weights)
-      return(track_error + trade_costs)
-    }
-    # The greedy algorithm (see https://qoppac.blogspot.com/2021/10/mr-greedy-and-tale-of-minimum-tracking.html)
-    find_possible_new_best <- function(weights_optimal, weights_max, weights_per_contract, direction, best_solution, best_value, cov_matrix, max_factor, buffer) {
-      new_best_value <- best_value
-      new_solution <- best_solution
-      count_assets <- length(best_solution)
-      for (i in sample(1:count_assets)) {
-        temp_step <- best_solution
-        if(temp_step[i] == 0) {
-          temp_step[i] <- temp_step[i] + weights_min[i] * direction[i]
-        } else {
-          temp_step[i] <- temp_step[i] + weights_per_contract[i] * fractional[i] * direction[i]
-        }
-        if(abs(temp_step[i]) > weights_max[i])
-          temp_step[i] <- weights_max[i] * sign(temp_step[i])
-        else if (abs(temp_step[i]) > max_factor * abs(weights_optimal[i]))
-          temp_step[i] <- max_factor * weights_optimal[i]
-        temp_objective_value <- evaluate(weights_optimal, temp_step, cov_matrix)
-        if (temp_objective_value < new_best_value) {
-          new_best_value <- temp_objective_value
-          new_solution <- temp_step
-        }
-      }
-      return(list(new_best_value, new_solution))
-    }
-    
-    # Number os instruments
-    n <- nrow(cov_matrix)
-    # Set previous positions as zero if not specified
-    if (is.null(previous_position)) {
-      previous_position <- rep(0, n)
-    }
-    # Set trading costs to zero if not specified
-    if (is.null(costs_per_contract)) {
-      costs_per_contract <- rep(0, n)
-    }
-    # Find a fractional increments from positions (e.g. if position == 1.2 then the increment is 0.1)
-    if (!fractional) {
-      fractional <- rep(1, n)
-    } else {
-      fractional <-  10^(floor(log10(abs(optimal_positions)))-1)
-    }
-    weights_per_contract <- notional_exposures / capital
-    weights_optimal <- optimal_positions * weights_per_contract 
-    weights_max <- if(!is.null(max_positions)) max_positions * weights_per_contract else rep(Inf, n)
-    weights_min <- if(!is.null(min_positions)) min_positions * weights_per_contract else weights_per_contract * fractional
-    weights_previous <- previous_position * weights_per_contract
-    costs_per_trade_in_weight <- (costs_per_contract  / capital) / weights_per_contract
-    best_solution <- rep(0,n)
-    best_value <- evaluate(weights_optimal, best_solution, cov_matrix)
-    while (1) {
-      res <- find_possible_new_best(weights_optimal, weights_max, weights_per_contract, sign(weights_optimal), best_solution, best_value, cov_matrix, max_factor)
-      new_best_value <- res[[1]]
-      new_solution <- res[[2]]
-      if (new_best_value < best_value) {
-        best_value <- new_best_value
-        best_solution <- new_solution
-      } else {
-        break
-      }
-    }
-    return(best_solution / weights_per_contract)
-  }
-  
-  ## Dynamic portfolio buffering.  Adapted from "Advanced futures trading strategies (2022)".
-  # capital : your money in your account currency
-  # optimized_positions : vector of optimized positions returned from the function "dynamic_portfolio"
-  # previous_position : vector of the previous optimal positions. All zeroes if not provided.
-  # notional_exposures : vector of the values in account currency of one contract (usually contract_size * price / FX_rate)
-  # cov_matrix : covariance matrix of instruments returns, usually calculated from the last 6 months of (daily or weekly) returns.
-  # target_volatility : your portfolio volatility target (e.g. 0.25)
-  # portfolio_buffering_level : the deviance representing the edges of the buffering. The highest this number the less frequent the portfolio updates.
-  #
-  # returned value: a list of: a vector of required positions updates to take (all zero if the adjustment factor is negative), 
-  #                            the tracking error of the portfolio 
-  #                            the adjustment factor (the percentage of position to adjust from the current to the optimized position)  
-  buffering_portfolio <- function(capital, optimized_positions, previous_positions, notional_exposures, cov_matrix, target_volatility, portfolio_buffering_level=0.1) {
-    weights_per_contract <- notional_exposures / capital
-    optimized_portfolio_weight <- optimized_positions * weights_per_contract 
-    previous_portfolio_weight <- previous_positions * weights_per_contract 
-    tracking_error_current_weight <- optimized_portfolio_weight - previous_portfolio_weight
-    tracking_error <- as.numeric(sqrt(t(tracking_error_current_weight) %*% cov_matrix %*% tracking_error_current_weight))
-    adjustment_factor <- max((tracking_error - portfolio_buffering_level/2 * target_volatility) / tracking_error, 0)
-    required_trade <- adjustment_factor * (optimized_positions - previous_positions) 
-    return(list(required_trade, tracking_error, adjustment_factor))
-  }
 }
 
 
@@ -481,8 +307,8 @@ if(capital <= 0 | is.na(capital))
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
   #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs") # static last corr matrix
-  Q <- runCorMatrix(as.matrix(weekly_returns[,-1]))
-  cor_matrix <- Q[[length(Q)]] # running corr matrix
+  Q <- runCorMatrix(as.matrix(weekly_returns[,-1])) # running corr matrix (note: if we use absolute correlation we get an error in the dynamic portfolio)
+  cor_matrix <- Q[[length(Q)]] 
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <- names(instruments_data)
@@ -492,11 +318,11 @@ if(capital <= 0 | is.na(capital))
   all <- list()
   results <- list()
   for(symbol in names(instruments_data)) {
-    print(symbol)
+    cat(paste(symbol, ""))
     df <- instruments_data[[symbol]][[1]]
     hc <- instruments_data[[symbol]][[2]]
     df$Symbol <- symbol
-    df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionOptimal <- df$PositionOptimized <- df$AdjFactor  <- df$RequiredTrade <- df$Buffer <- df$Trading <- df$PositionPrevious <- df$PositionUnrounded <- df$Position <- df$PositionRisk  <- 0
+    df$ForecastTrend <- df$ForecastCarry <- df$ForecastSkew <- df$Forecast <- df$PositionMax <- df$PositionOptimal <- df$PositionOptimized <- df$AdjFactor  <- df$RequiredTrade <- df$Buffer <- df$Trading <- df$PositionPrevious <- df$PositionUnrounded <- df$Position <- df$PositionChange <- df$PositionRisk  <- 0
     df$Return <- c(0, diff(log(df$Close)))
     df$Return[df$Period=="Weekly"]  <- df$Return[df$Period=="Weekly"] * 4.84 # adjust weekly data to daily volatility (4.84=252/52). Not sure if correct and/or necessary
     df$Volatility <- calculate_volatility(df$Return)
@@ -575,6 +401,7 @@ if(capital <= 0 | is.na(capital))
     write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
     results[[symbol]] <- df[1,]
   }
+  print("")
   # Final table
   today_trading <- do.call(rbind, results)
   if(!all(previous_trading$Symbol %in% today_trading$Symbol)) {
@@ -605,6 +432,7 @@ if(capital <= 0 | is.na(capital))
   today_trading$AdjFactor <- adjustment_factor
   # buffering is the minimal position change allowed, equal to 1 forecast
   today_trading$Buffer <- with(today_trading, position_buffering_level * (Exposure * FX * 10/10) / (ContractSize * Close))
+  today_trading$Buffer <- with(today_trading, ifelse(Buffer < PositionMin, PositionMin, Buffer))
   # if the previous position is 0 we override the required trade obtained from the buffering portfolio, and instead
   # we trade straight to the optimized position. Otherwise some positions never take place (like when the minimum position is very high) 
   today_trading$RequiredTrade <- required_trades
@@ -613,6 +441,7 @@ if(capital <= 0 | is.na(capital))
   today_trading$Trading <- with(today_trading, abs(RequiredTrade) >= Buffer & abs(RequiredTrade) >= PositionTick & abs(RequiredTrade) >= PositionMin)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, PositionMin, PositionTick))  
+  today_trading$PositionChange <- today_trading$Position - today_trading$PositionPrevious
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   # Portfolio volatility
   w <- with(today_trading, Position * ContractSize * Close / FX / capital) %>% as.numeric
