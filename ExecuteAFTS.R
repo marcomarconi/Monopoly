@@ -21,9 +21,11 @@
 
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
-  load_cmc_cash_data <- function(symbol,  dir, lagged=TRUE){
+  load_current_cmc_data <- function(symbol,  dir, load_daily=TRUE, load_weekly=TRUE, lagged=TRUE){
     symbol_dir <- paste0(dir, "/", symbol)
+    df <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
     # # load intra-day data
+    df_intraday <- data.frame(Date=NA, Close=NA)
     system(paste("cat", paste(list.files(symbol_dir, pattern = "intraday", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
     df_intraday <- fread("_tmp", header= FALSE)
     file.remove("_tmp")
@@ -31,65 +33,54 @@
     df_intraday$Date <- as_date(df_intraday$Date)
     df_intraday <- arrange(df_intraday, Date)
     df_intraday <- tail(df_intraday, 1)
-    # # load daily data, lag date by one day
-    # files <- list()
-    # for (l in list.files(symbol_dir, pattern = "daily")) {
-    #   #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-    #   f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
-    #   colnames(f) <- c("Date", "Close")
-    #   if(lagged) 
-    #     f <- f %>% mutate(Date = as_date((ifelse(wday(Date) == 5, Date+2, Date+1  ))))
-    #   files[[l]] <- f
-    # }
-    # # merge into one continous time series, remove possible dubplicates by keeping the last one
-    # df_daily = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
-    system(paste("cat", paste(list.files(symbol_dir, pattern = "daily", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
-    df_daily <- fread("_tmp", header= FALSE)
-    colnames(df_daily) <- c("Date", "Close")
-    df_daily <- arrange(df_daily, Date)
-    if(lagged) 
-      df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == "Fri", Date+2, Date+1  ))))
-    # only keep daily data up to the last element of intradaily data
-    df_daily <-  dplyr::filter(df_daily, Date < df_intraday$Date[1])
-    # load weekly data, lag date by two days
-    # files <- list()
-    # for (l in list.files(symbol_dir, pattern = "weekly")) {
-    #   #f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-    #   f <- fread(paste0(symbol_dir, "/", l), header= FALSE)
-    #   colnames(f) <- c("Date", "Close")
-    #   if(lagged) {
-    #     f[,1] <- f[,1]+2
-    #     f <- f[-1,]
-    #   }
-    #   files[[l]] <- f
-    # }
-    # # merge into one continous time series, remove possible dubplicates by keeping the last one
-    # df_weekly = do.call(rbind, files) %>% arrange(Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close)) %>% ungroup
-    # 
-    system(paste("cat", paste(list.files(symbol_dir, pattern = "weekly", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
-    df_weekly <- fread("_tmp", header= FALSE)
-    colnames(df_weekly) <- c("Date", "Close")
-    df_weekly <- arrange(df_weekly, Date)
-    if(lagged) {
-      df_weekly[,1] <- df_weekly[,1]+2
-      df_weekly <- df_weekly[-1,]
-    }
-    # only keep weekly data up to the start of daily data
-    df_weekly <- mutate(df_weekly, Date=as.Date(Date)) %>% dplyr::filter(Date < df_daily$Date[1])
-    # interpolate weekly data to create daily data
-    # first, recreate full daily Date excluding weekends
-    dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% 
-      as_tibble() %>% mutate(Date=value) %>% select(-value) %>% dplyr::filter(!(lubridate::wday(Date, label = TRUE) %in% c("Sat", "Sun")))
-    # then interpolate
-    df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close), Date=as_date(Date))
-    # merge all data
     df_intraday$Period <- "Intraday"
-    df_daily$Period <- "Daily"
-    df_weekly$Period <- "Weekly"
-    df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>%
-      arrange(Date) 
+    # # load daily data, lag date by one day
+    df_daily <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
+    if(load_daily) {
+      system(paste("cat", paste(list.files(symbol_dir, pattern = "daily", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
+      df_daily <- fread("_tmp", header= FALSE)
+      colnames(df_daily) <- c("Date", "Close")
+      df_daily <- arrange(df_daily, Date)
+      if(lagged) 
+        df_daily <- df_daily %>% mutate(Date = as_date((ifelse(wday(Date) == "Fri", Date+2, Date+1  ))))
+      # only keep daily data up to the last element of intradaily data
+      df_daily <-  dplyr::filter(df_daily, Date < df_intraday$Date[1])
+      df_daily$Period <- "Daily"
+      file.remove("_tmp")
+    }
+    # load weekly data, lag date by two days
+    df_weekly <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
+    if(load_weekly) {
+      system(paste("cat", paste(list.files(symbol_dir, pattern = "weekly", full.names = TRUE), collapse = " "),  " | sort -u  > _tmp"))
+      df_weekly <- fread("_tmp", header= FALSE)
+      colnames(df_weekly) <- c("Date", "Close")
+      df_weekly <- arrange(df_weekly, Date)
+      if(lagged) {
+        df_weekly[,1] <- df_weekly[,1]+2
+        df_weekly <- df_weekly[-1,]
+      }
+      # only keep weekly data up to the start of daily data
+      df_weekly <- mutate(df_weekly, Date=as.Date(Date)) %>% dplyr::filter(Date < df_daily$Date[1])
+      # interpolate weekly data to create daily data
+      # first, recreate full daily Date excluding weekends
+      dates <- seq(df_weekly$Date[1], df_weekly$Date[length(df_weekly$Date)], by=1) %>% 
+        as_tibble() %>% mutate(Date=value) %>% select(-value) %>% dplyr::filter(!(lubridate::wday(Date, label = TRUE) %in% c("Sat", "Sun")))
+      # then interpolate
+      df_weekly <- merge(df_weekly, dates, by="Date", all=TRUE) %>% mutate(Close=na.approx(Close), Date=as_date(Date))
+      df_weekly$Period <- "Weekly"
+      file.remove("_tmp")
+    }
+    if(load_daily & load_weekly)
+      df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
     df <- rbind(df, mutate(df_intraday, Date=as_date(Date))) %>% mutate(Date=as.Date(Date))
-    # load last holding cost
+    df <- na.omit(df) %>% dplyr::select(Date, Close, Period)
+    if((length(unique(df$Date)) != length(df$Date)))
+      stop(paste("Duplicate dates in ", symbol))
+    return(df)
+  }
+
+  load_current_cmc_hc <- function(symbol,  dir){
+    symbol_dir <- paste0(dir, "/", symbol)
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
     if(dim(f)[1] == 0) {
@@ -98,11 +89,16 @@
     } else {
       hc <- unlist(f[,-1])
     }
-    if((length(unique(df$Date)) != length(df$Date)))
-      stop(paste("Duplicate dates in ", symbol))
-    return(list("Price"=df, "HC"=hc))
+    return(hc)
   }
-
+  
+  load_historical_cmc_data <- function(symbol, dir){
+    symbol_file <- paste0(dir, "/", symbol, ".csv")
+    df <- fread(symbol_file) %>% mutate(Date=as.Date(Date)) %>% arrange(Date) 
+    return(df)
+  }
+  
+  
   multiple_EMA <- function(adjclose, close, volatility, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
     n <- length(spans)
     EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
@@ -111,8 +107,6 @@
     forecast <- rowMeans(do.call(cbind, EWMACs))
     return(forecast)
   }
-
-  
   multiple_DC <- function(adjclose, close, volatility, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
@@ -121,7 +115,6 @@
     forecast <- rowMeans(do.call(cbind, DCs))
     return(forecast)
   }
-  
   KalmanFilterIndicator <- function(x, sharpness=1, K=1) {
     n <- length(x)
     value <- rep(NA, n)
@@ -148,7 +141,6 @@
     forecast <- rowMeans(do.call(cbind, KFs))
     return(forecast)
   }
-  
   TII <- function(x, P = 60, ma=TTR::EMA) {
     ma_p <- ma(x, P)
     diff <- x - ma_p
@@ -161,7 +153,6 @@
     forecast <- rowMeans(do.call(cbind, TII))
     return(forecast)
   }
-  
   # basis and volatility are in percentage
   multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
     n <- length(spans)
@@ -172,11 +163,9 @@
     forecast <- rowMeans(do.call(cbind, EMAs))
     return(forecast)
   }
-  
   relative_volatility <- function(volatility, period=2520) {
     return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
   }
-
   multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
@@ -187,9 +176,6 @@
     forecast <- rowMeans(do.call(cbind, Skews))
     return(forecast)
   }
-  
-
-  
 }
 
 
@@ -198,12 +184,14 @@
   main_dir <- "/home/marco/trading/Systems/Monopoly/ExecuteATFS/"
   positions_file <- paste0(main_dir, "POSITIONS.csv")
   instrument_file <- paste0(main_dir, "INSTRUMENTS.csv")
+  portfolio_file <- paste0(main_dir, "PORTFOLIO.csv")
   FX_file <- paste0(main_dir, "FX.csv")
-  scrape_dir <- paste0(main_dir, "Scraping/")
+  scrape_dir <- paste0(main_dir, "Data/Scrape/")
+  historical_dir <- paste0(main_dir, "Data/Historical/")
+  current_dir <- paste0(main_dir, "Data/Scrape/")
   FX_dir <- paste0(main_dir, "FX/")
   logs_dir <- paste0(main_dir, "Logs/")
-  logs_instruments_dir <- paste0(logs_dir, "Instruments/")
-  scrape_script <- "SCRAPE_DATA.sh"
+  scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.33
   IDM = 3.5
   FDMtrend <- 1.3
@@ -213,8 +201,9 @@
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
   corr_length <- 25
   portfolio_buffering_level <- 0.1
-  position_buffering_level <- 0.25
+  position_buffering_level <- 0.2
   trade_shadow_cost <- 10
+  dry_run <- FALSE
 }
 
 
@@ -239,10 +228,8 @@ if(capital <= 0 | is.na(capital))
   now_string <- gsub("-| |:", "", now())
   if(!dir.exists(logs_dir))
     dir.create(logs_dir)
-  if(!dir.exists(logs_instruments_dir))
-    dir.create(logs_instruments_dir)
-  if(!dir.exists(scrape_dir))
-    dir.create(scrape_dir)
+  if(!dir.exists(current_dir))
+    dir.create(current_dir)
   if(!dir.exists(FX_dir))
     dir.create(FX_dir)
   
@@ -264,14 +251,19 @@ if(capital <= 0 | is.na(capital))
   # scrape price and FX data
   print("Scraping price and FX data...")
   setwd(main_dir)
-  system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  if(!dry_run)
+    system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
   # load price data from previous scrape
   print("Loading price data...")
   instruments_data <- list()
   for(symbol in instruments_info$Symbol) {
     cat(paste(symbol, ""))
-    instruments_data[[symbol]] <- load_cmc_cash_data(symbol, scrape_dir)
+    historical_data <- load_historical_cmc_data(symbol, historical_dir)
+    current_data <- load_current_cmc_data(symbol, scrape_dir, load_daily = FALSE, load_weekly = FALSE)
+    symbol_data <- rbind(historical_data, current_data) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
+    current_hc <- load_current_cmc_hc(symbol, scrape_dir)
+    instruments_data[[symbol]] <- list(Price=symbol_data, HC=current_hc)
     nas <- sum(is.na(instruments_data[[symbol]]$Price$Close))
     if(nas > 0) {
       warning(paste(symbol, "price data has", nas, "NAs. They have been filled"))
@@ -288,11 +280,7 @@ if(capital <= 0 | is.na(capital))
     cat(paste(fx, ""))
     f <- read_csv(paste0(FX_dir, "/", fx, ".csv"), col_names = TRUE, show_col_types = FALSE)
     colnames(f) <- c("Date", "Rate")
-    if(nrow(f) > 1) {
-      files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(2) %>% head(1) ### we take yesterday's rate, to match CMC data
-    }else{
-      files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(1)
-    }
+    files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(1)
   }
   FX_rates <- do.call(rbind, files) %>% mutate(FX=toupper(sub("eur", "", FX_names))) 
   colnames(FX_rates) <- c("Date", "Rate", "FX")
@@ -391,14 +379,15 @@ if(capital <= 0 | is.na(capital))
     df$InstCapital <- capital * df$Weight * IDM 
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
     df$PositionOptimal <-  (df$Exposure * df$FX * df$Forecast/10) /
-      (df$ContractSize * df$Close  ) 
+      (df$ContractSize * df$Close) 
     df$PositionMax <- (df$Exposure * df$FX * 20/10) /
       (df$ContractSize * df$Close  ) 
     df$Buffer <- position_buffering_level * (df$Exposure * df$FX * 10/10) / (df$ContractSize * df$Close)
     all[[symbol]] <- df
+    if(!dry_run)
+      write_csv(df, paste0(current_dir, "/", symbol, ".csv"))
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
     df <- arrange(df, desc(Date))
-    write_csv(df, paste0(logs_instruments_dir, "/", symbol, ".csv"))
     results[[symbol]] <- df[1,]
   }
   print("")
@@ -450,21 +439,30 @@ if(capital <= 0 | is.na(capital))
   # Portfolio jump risk
   jump <- lapply(results, function(x) quantile(x$Volatility, probs=0.99)) %>% unlist
   jump_cov_matrix <- diag(jump) %*% cor_matrix %*% diag(jump)
-  jump_risk <- round(sqrt(w %*% jump_cov_matrix %*% w) * 100, 2)
-  print(paste("Portfolio jump risk:", jump_risk, "%"))
+  portfolio_jump_risk <- round(sqrt(w %*% jump_cov_matrix %*% w) * 100, 2)
+  print(paste("Portfolio jump risk:", portfolio_jump_risk, "%"))
   # Portfolio correlation risk
   risks <- lapply(1:length(results), function(i) w[i] * tail(results[[i]]$Volatility, 1)) %>% unlist
-  correlation_shock_portfolio <- round(sum(abs(risks)), 2) * 100
-  print(paste("Portfolio correlation risk:", correlation_shock_portfolio, "%"))
+  portfolio_correlation_risk <- round(sum(abs(risks)), 2) * 100
+  print(paste("Portfolio correlation risk:", portfolio_correlation_risk, "%"))
   # Active positions
-  print(paste("Active positions:", sum(today_trading$Position != 0), "total symbols:", nrow(today_trading)))
+  portfolio_positions <- sum(today_trading$Position != 0)
+  portfolio_symbols <- nrow(today_trading)
+  print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(trades, n=nrow(trades))
   
   # Write to file
-  write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
-  write_csv(today_trading, "POSITIONS.csv")
+  if(!dry_run) {
+    write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
+    write_csv(today_trading, "POSITIONS.csv")
+    portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE)
+    info <- data.frame(Date=today_string, Symbols=portfolio_symbols, 
+                       Positions=portfolio_positions, Tracking_Error=portfolio_tracking_error, Volatility=portfolio_volatility, 
+                       Jump_Risk=portfolio_jump_risk, Correlation_Risk=portfolio_correlation_risk)
+    write_csv(rbind(info, portfolio_info), portfolio_file)
+  }
 }
 
 # 

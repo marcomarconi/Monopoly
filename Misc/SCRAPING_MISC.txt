@@ -1,4 +1,4 @@
-## A collection of scraping functions, write a separate bash script to execute them
+## A collection of scraping functions from CMC and Yahoo, write a separate bash script to execute them
 
 # Download futures contracts
 start_month=5
@@ -110,7 +110,7 @@ done <<< `tail -n+2 INSTRUMENTS.csv`
 
 
 
-### Scrape forex holding costs, provide a file withe the list of pairs, like "eur-usd", without quotes
+### Scrape forex holding costs from CMC, provide a file withe the list of pairs, like "eur-usd", without quotes
 while IFS=, read -r w1; do
   f=$w1
   echo $f
@@ -126,14 +126,14 @@ while IFS=, read -r w1; do
 done < fx_pairs.txt
 
 
-### Scrape forex last price, minimum spread and spread. Provide a file withe the list of pairs, like "eur-usd", without quotes
+### Scrape forex last price from CMC, minimum spread and spread. Provide a file withe the list of pairs, like "eur-usd", without quotes
 while IFS=, read -r f; do
   # we scrape the main symbol page, where we can fine the apicode and the apikey
   scrape=_scrape.$f.html
   wget -q "https://www.cmcmarkets.com/en-gb/instruments/"$f -O $scrape;
   apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
   apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
-  # download the "hidden" json file
+  # download the "hidden" json filesle
   wget "https://ws.cmcmarkets.com/instruments/price/"$apicode"?key="$apikey -q -O "_"$f.price
   price=`grep "buy.*movement_percentage" -o "_"$f.price | sed 's/buy":\([0-9\.]*\),"sell":\([0-9\.]*\),"decimal_places":\([0-9\.]*\),"points_multiplier":\([0-9\.]*\),"movement_percentage/\1,\2,\3,\4/'`
   wget "https://ws.cmcmarkets.com/json/instruments/"$apicode"_gb.json" -q -O "_"$f.json
