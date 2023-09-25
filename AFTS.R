@@ -16,8 +16,6 @@
 
 Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
 BackAdj <- read_rds("/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
-target_vol <- 0.2
-
 
 ## Stategy 1
 {SP500 <- backadjust_future(Futures[["ES"]], N = 5)
@@ -921,8 +919,10 @@ print(res$Aggregate %>% unlist)
   # Final Backtest
   {
     # A subset of instrument I might actually trade
-    CMC_selection <- c("ZN","GG","CC","KC","HG","ZC","CT","CL","IM","GC","HE","LE","LS","NG","ZO","OJ","ZR","ZS","ES","SB","DX","ZW","D6")
-    Assets <- BackAdj# or BackAdj[CMC_selection]
+    CMC_selection <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", "SI", "GC","HE","GF", "LE","LS","NG","ZO",
+                       "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
+                       "ES","DX","ZW","D6","HS","NY","LX","A6","B6","E6","J6","M6","N6","NR","QT","S6","T6","SK")
+    Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
     results <- list()
     forecasts <- list()
     exposures <- list()
@@ -942,7 +942,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- FALSE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "CSM"=0, "Skew"=0, "Test"=1)
+    weights <- list("Long"=0, "Trend"=0.4, "Carry"=0.5, "CSM"=0, "Skew"=0.1, "Test"=0)
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1084,10 +1084,18 @@ print(res$Aggregate %>% unlist)
     weights <- 1 / length(names(Assets)) # equal weights per instrument
     res <- portfolio_summary(as.matrix(portfolio[,-1]) * weights, dates = portfolio$Date, plot_stats = TRUE, symbol_wise = symbol_wise  ) 
     print(res$Aggregate %>% unlist)
+    res <- portfolio_summary(as.matrix(portfolio[,-1]) * portfolio_weights, dates = as.Date(portfolio$Date), plot_stats = TRUE, symbol_wise = symbol_wise) 
+    print(res$Aggregate %>% unlist)
+    all_forecasts <- do.call(rbind,forecasts)[,2] %>% na.omit
+    avg_forecast_turnover <- round(252 * mean(abs(diff(all_forecasts/10))), 2)
+    avg_trade_turnover <- round(length(rle(all_forecasts>0)$length) / (length(all_forecasts)/252), 2)
+    print(paste("Average Forecast Turnover:", avg_forecast_turnover))
+    print(paste("Average Trade Turnover:", avg_trade_turnover))
     if(symbol_wise) {
       res$Symbols$Class <- lapply(Assets[names(results)], function(x) x$Class[1]) %>% unlist
       group_by(res$Symbols, Class) %>% summarise(SR_mean=mean(`Sharpe ratio`, na.rm=T), SR_sd=sd(`Sharpe ratio`, na.rm=T))
     }
+    {
     ## Some figures takes from the Risk Management section
     # Figure 97: Portfolio volatility, check it is in line with target volatility
     # full_df_exposures <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), exposures) %>% arrange(Date)
@@ -1096,6 +1104,7 @@ print(res$Aggregate %>% unlist)
     # a <- sapply(181:nrow(full_df_returns),  function(i) { w <- as.numeric(full_df_exposures[i,-1]); w[is.na(w)] <- 0; S <-  cov(full_df_returns[(i-180):i,-1], use="pairwise.complete.obs"); S[is.na(S)] <- 0; sqrt( w %*% S %*% w  )  } )
     # plot.ts(a*100); abline(h=target_vol*100)
     # a <- rowSums(abs(full_df_exposures[,-1] * full_df_vols[,-1]), na.rm=T)
+    }
   }
   
 }

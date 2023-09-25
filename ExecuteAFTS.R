@@ -10,6 +10,7 @@
   suppressMessages(library(moments))
   suppressMessages(library(ggthemes))
   suppressMessages(library(data.table))
+  suppressMessages(library(Rfast))
   source("/home/marco/trading/Systems/Common/RiskManagement.R")
   
 }
@@ -21,8 +22,8 @@
 
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
-  load_current_cmc_data <- function(symbol,  dir, load_daily=TRUE, load_weekly=TRUE, lagged=TRUE){
-    symbol_dir <- paste0(dir, "/", symbol)
+  load_current_cmc_data <- function(symbol,  scrape_dir, load_daily=TRUE, load_weekly=TRUE, lagged=TRUE){
+    symbol_dir <- paste0(scrape_dir, "/", symbol)
     df <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
     # # load intra-day data
     df_intraday <- data.frame(Date=NA, Close=NA)
@@ -31,8 +32,8 @@
     file.remove("_tmp")
     colnames(df_intraday) <- c("Date", "Close")
     df_intraday$Date <- as_date(df_intraday$Date)
-    df_intraday <- arrange(df_intraday, Date)
-    df_intraday <- tail(df_intraday, 1)
+    df_intraday <- arrange(df_intraday, Date) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close))
+    #df_intraday <- tail(df_intraday, 1)
     df_intraday$Period <- "Intraday"
     # # load daily data, lag date by one day
     df_daily <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
@@ -72,10 +73,13 @@
     }
     if(load_daily & load_weekly)
       df <- rbind(df_weekly, df_daily) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
-    df <- rbind(df, mutate(df_intraday, Date=as_date(Date))) %>% mutate(Date=as.Date(Date))
+    df <- rbind(df, df_intraday) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
+    #df <- rbind(df, mutate(df_intraday, Date=as_date(Date))) %>% mutate(Date=as.Date(Date))
     df <- na.omit(df) %>% dplyr::select(Date, Close, Period)
     if((length(unique(df$Date)) != length(df$Date)))
       stop(paste("Duplicate dates in ", symbol))
+    if(tail(df$Date, 1) != today())
+      warning(paste("Last date does not correspond to today in ", symbol))
     return(df)
   }
 
@@ -84,7 +88,7 @@
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
     if(dim(f)[1] == 0) {
-      warning(paste("Holding cost file empty for symbol:", symbol))
+      stop(paste("Holding cost file empty for symbol:", symbol))
       hc <- c(0,0)        
     } else {
       hc <- unlist(f[,-1])
@@ -166,10 +170,11 @@
   relative_volatility <- function(volatility, period=2520) {
     return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
   }
-  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
+  # scalar have been readapted to fit CMC cash data
+  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(21.1, 21.8, 22.8), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
-    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skewness,  fill=NA, align="right"))
+    Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
     Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
     Skews <-  lapply(1:n, function(i) EMA(Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
     Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
@@ -194,16 +199,16 @@
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.33
   IDM = 3.5
-  FDMtrend <- 1.3
-  FDMcarry <- 3.3
-  FDMskew <- 1.2
+  FDMtrend <- 1.19
+  FDMcarry <- 3.0
+  FDMskew <- 1.21 # relaculated using CMC data and the skew rules above
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
   corr_length <- 25
   portfolio_buffering_level <- 0.1
-  position_buffering_level <- 0.2
+  position_buffering_level <- 0.25
   trade_shadow_cost <- 10
-  dry_run <- FALSE
+  dry_run <- FALSE 
 }
 
 
@@ -327,7 +332,6 @@ if(capital <= 0 | is.na(capital))
     df$ContractSize <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(ContractSize)
     df$PositionMin <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(PositionMin)
     df$PositionTick <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(PositionTick)
-    df$Decimals <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Decimals)
     df$Spread <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Spread)
     df$Commission <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Commission)
     df$CostPerTrade <- (df$Spread / 2 + df$Commission) 
@@ -398,6 +402,7 @@ if(capital <= 0 | is.na(capital))
     missing_today <- today_trading$Symbol[!(today_trading$Symbol %in% previous_trading$Symbol)]
     stop(paste("Previous position symbols (POSITION file) and current symbols (INSTRUMENTS file) do not match. Missing in current: ", missing_prev, ", missing in previous: ", missing_today, "\nFix it manually."))
   }
+  {
   # Dynamic portfolio
   optimal_positions <- with(today_trading, PositionOptimal)
   max_positions <- with(today_trading, PositionMax)
@@ -434,12 +439,12 @@ if(capital <= 0 | is.na(capital))
   today_trading$PositionRisk <- abs(with(today_trading, Position * ContractSize * (Close / FX) * Volatility)) %>% round(2)
   # Portfolio volatility
   w <- with(today_trading, Position * ContractSize * Close / FX / capital) %>% as.numeric
-  portfolio_volatility <- round(sqrt(w %*% cov_matrix %*% w) * 100, 2)
+  portfolio_volatility <- round(as.numeric(sqrt(w %*% cov_matrix %*% w)) * 100, 2)
   print(paste("Portfolio volatility:", portfolio_volatility, "%"))
   # Portfolio jump risk
   jump <- lapply(results, function(x) quantile(x$Volatility, probs=0.99)) %>% unlist
   jump_cov_matrix <- diag(jump) %*% cor_matrix %*% diag(jump)
-  portfolio_jump_risk <- round(sqrt(w %*% jump_cov_matrix %*% w) * 100, 2)
+  portfolio_jump_risk <- round(sqrt(as.numeric(w %*% jump_cov_matrix %*% w)) * 100, 2)
   print(paste("Portfolio jump risk:", portfolio_jump_risk, "%"))
   # Portfolio correlation risk
   risks <- lapply(1:length(results), function(i) w[i] * tail(results[[i]]$Volatility, 1)) %>% unlist
@@ -450,15 +455,16 @@ if(capital <= 0 | is.na(capital))
   portfolio_symbols <- nrow(today_trading)
   print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
   print("Positions to update:")
-  trades <- today_trading %>% filter(Trading == TRUE) %>% select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
+  trades <- today_trading %>% filter(Trading == TRUE) %>% 
+    dplyr::select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(trades, n=nrow(trades))
-  
+  }
   # Write to file
   if(!dry_run) {
     write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
     write_csv(today_trading, "POSITIONS.csv")
-    portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE)
-    info <- data.frame(Date=today_string, Symbols=portfolio_symbols, 
+    portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE) %>% as.data.frame()
+    info <- tibble(Date=today_string, Symbols=portfolio_symbols, 
                        Positions=portfolio_positions, Tracking_Error=portfolio_tracking_error, Volatility=portfolio_volatility, 
                        Jump_Risk=portfolio_jump_risk, Correlation_Risk=portfolio_correlation_risk)
     write_csv(rbind(info, portfolio_info), portfolio_file)
@@ -466,7 +472,7 @@ if(capital <= 0 | is.na(capital))
 }
 
 # 
-# ## some backtesting on real CMC data, to be removed
+# ## some backtesting on real CMC data
 # full <- Reduce(function(...) full_join(..., by="Date"), all) %>% arrange(Date) %>% na.omit
 # closes <- full[,grep("^Date|^Close", colnames(full))]
 # colnames(closes)<-c("Date", names(instruments_data))

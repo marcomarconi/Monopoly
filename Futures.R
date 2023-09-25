@@ -17,23 +17,6 @@
   theme_set(theme_bw(base_size = 32))
 }
 
-# for some reason, scrapped CMC data are lagged one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
-merge_barchart_cmc_data <- function(symbol, future, dir="/home/marco/trading/Historical Data/CMC/", lagged=TRUE) {
-  symbol_dir <- paste0(dir, "/", symbol)
-  files <- list()
-  for (l in list.files(symbol_dir)) {
-    n <- sub(".csv", "", l)
-    f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
-    if(lagged)
-      f[,1] <- f[,1]+1
-    colnames(f) <- c("Date", n)
-    files[[n]] <- f
-  }
-  df = Reduce(function(...) full_join(..., by="Date"), files) %>% arrange(Date)
-  mg <- merge(future, df, by="Date", all=TRUE)
-  return(mg)
-}
-
 
 # Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
 load_future_contracts <- function(symbol, dir, order_years=c(80:99,0:30), order_months=c("f", "g", "h", "j", "k", "m", "n", "q", "u", "v", "x", "z")) {
@@ -615,7 +598,7 @@ cumsum(vol$Excess %>% na.omit) %>% plot
 strategy_performance(vol$Excess, vol$Date) %>% unlist
 }
 
-# Volatiliy spread
+# ES/YM spread
 {
   vol <- merge(BackAdj$ES, BackAdj$YM, by="Date")
   vol$Close <- (vol$Close.x - vol$Close.y )%>% na.locf(na.rm=F)
