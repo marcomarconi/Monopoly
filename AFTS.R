@@ -935,6 +935,7 @@ print(res$Aggregate %>% unlist)
     FDMcsm <- 1.4
     FDMskew <- 1.18
     FDM <- 1
+    starting_year <- 2023
     # Apply relative volatility
     relative_vol <- FALSE
     # Apply Marker Correlation
@@ -1012,12 +1013,7 @@ print(res$Aggregate %>% unlist)
       }
       
       if(weights[["Test"]]  > 0) {
-        logitm <- 30; logitr <- 25
-        rsi <- multiple_RSI(df$Close%>% na.locf(na.rm=F)) / 20
-        rsi <- -((invlogit(logitm*rsi-logitr) + invlogit(logitm*rsi+25))-1) * 20
-        forecast <- EMA(rsi , 5)     
-        forecast <- multiple_RSI(df$Close%>% na.locf(na.rm=F))
-        df$ForecastTest <-   forecast
+
       }   
       
       {  # Tests
@@ -1072,6 +1068,7 @@ print(res$Aggregate %>% unlist)
                        weights[["Test"]] * df$ForecastTest) / 10 
       df$Forecast <- lag(df$Forecast)
       df$Excess <- df$Return * df$Position * df$Forecast * IDM 
+      df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 
       exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast) %>% select(Date, Exposure) 
       returns[[symbol]]  <-  select(df, Date, Return)

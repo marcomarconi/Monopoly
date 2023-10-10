@@ -1,5 +1,4 @@
-#TODO:
-# minium position in dynamic portfolio: it should be first increment in the greedy algorithm
+
 {
   suppressMessages(library(tidyverse))
   suppressMessages(library(moments))
@@ -11,6 +10,7 @@
   suppressMessages(library(ggthemes))
   suppressMessages(library(data.table))
   suppressMessages(library(Rfast))
+  suppressMessages(library(optparse))
   source("/home/marco/trading/Systems/Common/RiskManagement.R")
   
 }
@@ -198,29 +198,29 @@
   logs_dir <- paste0(main_dir, "Logs/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.33
-  IDM = 3.5
+  IDM = 2.68
   FDMtrend <- 1.19
   FDMcarry <- 3.0
   FDMskew <- 1.21 # relaculated using CMC data and the skew rules above
   FDM <- 1.5
-  strategy_weights <- list("Trend" = 0.4, "Carry" = 0.5, "Skew" = 0.1)
+  strategy_weights <- list("Trend" = 0.5, "Carry" = 0.4, "Skew" = 0.1)
   corr_length <- 25
   portfolio_buffering_level <- 0.1
-  position_buffering_level <- 0.25
+  position_buffering_level <- 0.2
   trade_shadow_cost <- 10
   dry_run <- FALSE 
 }
 
 
-# Execute
-args = commandArgs(trailingOnly=TRUE)
-if(length(args) == 1) {
-  capital <- as.numeric(args[1])  
-}else{
-  stop("Provide capital as arguments.")
-}
-if(capital <= 0 | is.na(capital))
-  stop("Capital must be positive number")
+# Read command arguments
+option_list = list(
+    make_option(c("-c", "--capital"),  type="double", help="Account Capital."),
+    make_option(c("-d", "--dryrun"), action="store_true", default=FALSE, help="Do not write any file.")
+);
+opt_parser = OptionParser(option_list=option_list);
+opt = parse_args(opt_parser);
+capital <- opt$capital
+dry_run <- opt$dryrun
 
 
 
@@ -429,8 +429,11 @@ if(capital <= 0 | is.na(capital))
   today_trading$Buffer <- with(today_trading, ifelse(Buffer < PositionMin, PositionMin, Buffer))
   # if the previous position is 0 we override the required trade obtained from the buffering portfolio, and instead
   # we trade straight to the optimized position. Otherwise some positions never take place (like when the minimum position is very high) 
+  # Also, if the current position == min position and the optimal is zero, close the position. This is necessary otherwise sometimes open 
+  # positions equal to the minimum are never closed.
   today_trading$RequiredTrade <- required_trades
   today_trading$RequiredTrade <- with(today_trading, ifelse(abs(RequiredTrade) > 0 & PositionPrevious == 0, PositionOptimized, RequiredTrade))
+  today_trading$RequiredTrade <- with(today_trading, ifelse(PositionOptimized == 0 & abs(PositionPrevious) == PositionMin, -PositionPrevious, RequiredTrade))
   # trade only if the required trade if bigger than buffer, bigger than position tick size and bigger than minumum position
   today_trading$Trading <- with(today_trading, abs(RequiredTrade) >= Buffer & abs(RequiredTrade) >= PositionTick & abs(RequiredTrade) >= PositionMin)
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
@@ -456,7 +459,7 @@ if(capital <= 0 | is.na(capital))
   print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% 
-    dplyr::select(Date, Close, Symbol, Position, PositionUnrounded, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
+    dplyr::select(Date, Close, Symbol, PositionChange, Position, PositionPrevious, RequiredTrade, PositionOptimized, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(trades, n=nrow(trades))
   }
   # Write to file

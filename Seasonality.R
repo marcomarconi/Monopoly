@@ -1,7 +1,6 @@
 {
     library(ggthemes)
-    source("/home/marco/trading/Systems/Monopoly/Futures.R")
-    
+
 }
 
 ### Trading rules:
@@ -121,7 +120,7 @@ with(a, mean(Excess)/sd(Excess)*sqrt(52))
     mutate(Spread = 0.0011) %>% 
     mutate(Position = 1 / calculate_volatility(df$Return)) %>% mutate(Position = ifelse(!is.na(Position), Position, 0)) %>% 
     mutate(Trend = lag(EMA(AdjClose, 1) - EMA(AdjClose, 4))) %>% 
-    mutate(Trade = case_when(dom == 2 & Trend < 0 & Basis < 0 ~ -1  , dom > 2 & Trend > 0 & Basis > 0 ~ 1  , TRUE ~ 0)) %>% 
+    mutate(Trade = case_when(dom == 2 & Trend < 0 & Basis < 0 ~ -1, dom > 2 & Trend > 0 & Basis > 0 ~ 1  , TRUE ~ 0)) %>% 
     mutate(Excess = Return * Position * Trade, Cost = Spread * Position) %>% 
     group_by(Date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
     summarise(Date=Date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
@@ -193,7 +192,7 @@ with(a, mean(Excess)/sd(Excess)*sqrt(52))
     mutate(Spread = 0.003) %>% 
     mutate(Position = 1 / calculate_volatility(df$Return)) %>% mutate(Position = ifelse(!is.na(Position), Position, 0)) %>% 
     mutate(Trend = lag(EMA(AdjClose, 1) - EMA(AdjClose, 4))) %>% 
-    mutate(Trade = case_when(dom %in% c(1,2)  & Basis > 0 & Trend > 0 ~ 1   , dom %in% c(3,4)  & Basis < 0 & Trend < 0 ~ -1   , TRUE ~ 0)) %>% 
+    mutate(Trade = case_when(dom %in% c(1,2)  & Basis > 0 & Trend > 0 ~ 1      , TRUE ~ 0)) %>% 
     mutate(Excess = Return * Position * Trade, Cost = Spread * Position) %>% 
     group_by(date) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(sum(unique(Trade)!=0)), Cost=first(Cost*Trades)) %>% ungroup %>% 
     summarise(date=date,PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost)
