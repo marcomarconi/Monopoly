@@ -25,7 +25,7 @@ platinum-cash,pl,CMC,NA,NA,Future,Metal_Energy,Metal,1,0.7,0.01,USD,2,1,0
 palladium-cash,pa,CMC,NA,NA,Future,Metal_Energy,Metal,1,0.6,0.01,USD,2,1.49,0
 copper-cash,hg,CMC,NA,NA,Future,Metal_Energy,Metal,0.01,200,0.1,USD,2,0.2,0
 heating-oil-cash,lo,CMC,NA,NA,Future,Metal_Energy,Oil,1,250,0.1,USD,4,0.0028,0
-crude-oil-west-texas-cash,cl,CMC,NA,NA,Future,Metal_Energy,Oil,1,8,0.01,USD,3,0.0025,0
+crude-oil-west-texas-cash,cl,CMC,NA,NA,Future,Metal_Energy,Oil,1,8,0.01,USD,3,0.025,0
 gasoline-cash,rb,CMC,NA,NA,Future,Metal_Energy,Oil,1,250,0.1,USD,4,0.0025,0
 low-sulphur-gasoil-cash,lf,CMC,NA,NA,Future,Metal_Energy,Oil,1,1,0.01,USD,2,0.5,0
 us-t-note-10-yr-cash,zn,CMC,NA,NA,Future,Equity_Debt,Debt,1,0.01,0.01,USD,3,0.03,0

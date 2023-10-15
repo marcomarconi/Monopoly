@@ -1,3 +1,5 @@
+### Test and Backtest on F data
+
 {
   library(tidyverse)
   library(Rfast)
@@ -919,9 +921,10 @@ print(res$Aggregate %>% unlist)
   # Final Backtest
   {
     # A subset of instrument I might actually trade
-    CMC_selection <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", "SI", "GC","HE","GF", "LE","LS","NG","ZO",
+    CMC_selection <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
+                       "SI", "GC","HE","GF", "LE","LS","NG","ZO",
                        "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
-                       "ES","DX","ZW","D6","HS","NY","LX","A6","B6","E6","J6","M6","N6","NR","QT","S6","T6","SK")
+                       "ES","ZW","HS","NY","LX")
     Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
     results <- list()
     forecasts <- list()
@@ -943,7 +946,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- FALSE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0.4, "Carry"=0.5, "CSM"=0, "Skew"=0.1, "Test"=0)
+    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.4, "CSM"=0, "Skew"=0.1, "Test"=0)
     if(sum(unlist(weights)) != 1)
       warning("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1078,8 +1081,8 @@ print(res$Aggregate %>% unlist)
     
     print("")
     portfolio <- merge_portfolio_list(results)
-    weights <- 1 / length(names(Assets)) # equal weights per instrument
-    res <- portfolio_summary(as.matrix(portfolio[,-1]) * weights, dates = portfolio$Date, plot_stats = TRUE, symbol_wise = symbol_wise  ) 
+    portfolio_weights <- 1 / length(names(Assets)) # equal weights per instrument
+    res <- portfolio_summary(as.matrix(portfolio[,-1]) * portfolio_weights, dates = portfolio$Date, plot_stats = TRUE, symbol_wise = symbol_wise  ) 
     print(res$Aggregate %>% unlist)
     res <- portfolio_summary(as.matrix(portfolio[,-1]) * portfolio_weights, dates = as.Date(portfolio$Date), plot_stats = TRUE, symbol_wise = symbol_wise) 
     print(res$Aggregate %>% unlist)
@@ -1131,6 +1134,73 @@ print(res$Aggregate %>% unlist)
 # acc                     -0.05            0.81            0.00          -0.26          1.00
 
 
+
+
+# ## some backtesting on real CMC data (the variable all come from live trading in ExecuteATFS.R)
+{
+{
+  full <- Reduce(function(...) full_join(..., by="Date"), all) %>% arrange(Date) %>% na.omit
+  pricecloses <- full[,grep("^Date|^Close", colnames(full))]
+  colnames(pricecloses)<-c("Date", names(all))
+  contractsizes <- full[,grep("^Date|^ContractSize", colnames(full))]
+  colnames(contractsizes)<-c("Date", names(all))
+  symbolspreads <- full[,grep("^Date|^Spread", colnames(full))]
+  colnames(symbolspreads)<-c("Date", names(all))
+  positionoptimal <- full[,grep("^Date|^PositionOptimal", colnames(full))]
+  colnames(positionoptimal)<-c("Date", names(all))
+  positionmax <- full[,grep("^Date|^PositionMax", colnames(full))]
+  colnames(positionmax)<-c("Date", names(all))
+  positionmin <- full[,grep("^Date|^PositionMin", colnames(full))]
+  colnames(positionmin)<-c("Date", names(all))
+  positionticks <- full[,grep("^Date|^PositionTick", colnames(full))]
+  colnames(positionticks)<-c("Date", names(all))
+  returns <- full[,grep("^Date|^Return", colnames(full))]
+  colnames(returns)<-c("Date", names(all))
+  cov_matrix <- cov(returns[,-1])
+  fx <- full[,grep("^Date|^FX", colnames(full))]
+  colnames(fx)<-c("Date", names(all))
+  fr <- full[,grep("^Date|^Forecast\\.|^Forecast$", colnames(full))]
+  colnames(fr)<-c("Date", names(all))
+  volatilities <- full[,grep("^Date|^Volatility", colnames(full))]
+  colnames(volatilities)<-c("Date", names(all))
+  # Go thorought the optimal positions and calculate the optimized positions
+  {
+  previous_positions <- rep(0, ncol(positionoptimal)-1)
+  positionsoptimized <- matrix(0, nrow(full), ncol(positionoptimal)-1); colnames(positionsoptimized) <- names(all)
+  positionsbuffered <- matrix(0, nrow(full), ncol(positionoptimal)-1); colnames(positionsbuffered) <- names(all)
+  capital <- 14000
+  for(i in 2:nrow(full)){
+    print(i)
+    optimal_positions <- positionoptimal[i,-1] %>% unlist
+    FX <- fx[i,-1] %>% unlist
+    closes <- pricecloses[i,-1] %>% unlist
+    spreads <- symbolspreads[i,-1] %>% unlist
+    fractionals <- (positionmax[i,-1] %>% unlist)/20
+    sizes <- contractsizes[i,-1] %>% unlist
+    max_positions <- positionmax[i,-1] %>% unlist
+    min_positions <- positionmin[i,-1] %>% unlist
+    positions_ticks <- positionticks[i,-1] %>% unlist
+    notional_exposures <- (sizes * closes / FX) %>% unlist
+    costs_per_contract <-   ((sizes * spreads/2) / FX) %>% unlist
+    optimized_positions <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix, 
+                                             previous_position = previous_positions, max_positions = NULL, 
+                                             min_positions = NULL,  costs_per_contract=costs_per_contract, 
+                                             trade_shadow_cost = 1, fractional = fractionals)
+    positionsoptimized[i,] <- optimized_positions
+    res <- buffering_portfolio(capital, optimized_positions, previous_positions, notional_exposures, cov_matrix, 0.25, 0.025)
+    positionsbuffered[i,] <- round_position(positionsbuffered[i-1,] + res[[1]], min_positions, positions_ticks)
+    previous_positions <- positionsbuffered[i,]
+  }
+  positionsoptimized <- data.frame(Date=full$Date, positionsoptimized); 
+  positionsbuffered <- data.frame(Date=full$Date, positionsbuffered); 
+  }
+}
+# Calculate turnover  
+finalpositions <- positionsbuffered
+all_forecasts <- unlist(finalpositions[,-1])
+avg_trade_turnover <- round(length(rle(all_forecasts>0)$length) / (length(all_forecasts)/252), 2)
+print(paste("Average Trade Turnover:", avg_trade_turnover))
+}
 
 
 
