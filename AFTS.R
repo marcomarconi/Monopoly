@@ -19,6 +19,8 @@
 Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
 BackAdj <- read_rds("/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
 
+# All book's strategies
+{
 ## Stategy 1
 {SP500 <- backadjust_future(Futures[["ES"]], N = 5)
 SP500$Return[is.na(SP500$Return)] <- 0
@@ -770,6 +772,7 @@ print(res$Aggregate %>% unlist)
   res <- portfolio_summary(as.matrix(portfolio[,-1]), dates = portfolio$Date, plot_stats = TRUE, symbol_wise = FALSE, benchmark.dates = benchmark.dates, benchmark.returns = benchmark.returns) 
   print(res$Aggregate %>% unlist)
 }
+}
 
 ### Production strategy VERY IMPORTANT this is the backtest of the production strategy  
 
@@ -921,39 +924,41 @@ print(res$Aggregate %>% unlist)
   # Final Backtest
   {
     # A subset of instrument I might actually trade
-    CMC_selection <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
-                       "SI", "GC","HE","GF", "LE","LS","NG","ZO",
-                       "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
+    CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
+                       "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
                        "ES","ZW","HS","NY","LX")
+    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ES","ZW","HS")
+    Assets_all <- BackAdj 
     Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
     results <- list()
     forecasts <- list()
     exposures <- list()
     returns <- list()
     vols <- list()
+    strategies <- list()
     target_vol <- 0.25
     IDM = 2.5
     FDMtrend <- 1.33
-    FDMcarry <- 1.05 # so small?
+    FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1
-    starting_year <- 2023
+    FDM <- 1.5
+    starting_year <- 2003
     # Apply relative volatility
     relative_vol <- FALSE
     # Apply Marker Correlation
     market_cor <- FALSE
     # Symbol-wise results
-    symbol_wise <- FALSE
+    symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.4, "CSM"=0, "Skew"=0.1, "Test"=0)
+    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
-      warning("Strategy weights do not sum to zero")
+      stop("Strategy weights do not sum to zero")
     # Asset class indices
     if(weights[["CSM"]] > 0) {
       NPs <- list()
-      for(n in names(Assets)) {
-        df <- Assets[[n]]
+      for(n in names(Assets_all)) {
+        df <- Assets_all[[n]]
         df$Volatility = calculate_volatility(df$Return)
         df$NP <- normalize_price(df$AdjClose, df$Close, df$Volatility)
         df$dNP = c(0, diff(df$NP))
@@ -968,9 +973,9 @@ print(res$Aggregate %>% unlist)
       cat(paste(symbol, ""))
       df <- Assets[[symbol]]
       df$Volatility = calculate_volatility(df$Return)
-      df$Position = lag(target_vol / df$Volatility)
+      df$Position = target_vol / df$Volatility
       df$Return[is.na(df$Return)] <- 0
-      df$ForecastTrend <- df$ForecastCarry <- df$ForecastCSM <- df$ForecastSkew <- df$ForecastTest <- 0
+      df$ForecastLong <- df$ForecastTrend <- df$ForecastCarry <- df$ForecastCSM <- df$ForecastSkew <- df$ForecastTest <- 0
       
       # Relative volatility (strategy 13, improvement is minimal, and we only apply it to trend)
       df$M <- 1
@@ -986,6 +991,11 @@ print(res$Aggregate %>% unlist)
         df <- merge(df, select(BackAdj$ES, Date, Return) %>% mutate(ES=Return) %>% select(-Return), by="Date") 
         df$Cor <- multiple_cor(df$Return %>% na.locf(na.rm=F), df$ES %>% na.locf(na.rm=F))
         df$Cor <- -df$Cor * 0.75 + 1.25
+      }
+      
+      # Long-only
+      if(weights[["Long"]]  > 0) {
+        df$ForecastLong <- runif(n = nrow(df), 5, 15)
       }
       
       # Trend-following (strategy 9)
@@ -1027,17 +1037,17 @@ print(res$Aggregate %>% unlist)
       #   df$ForecastTest <- cap_forecast(df$ForecastTest)
       # }
       # Acceleration
-      # if(weights[["Test"]]  > 0) {
-      #   df$Forecast16 <- (EMA(df$AdjClose, 16) -  EMA(df$AdjClose, 64)) / (df$Close * df$Volatility / 16) * 4.1
-      #   df$Forecast32 <- (EMA(df$AdjClose, 32) -  EMA(df$AdjClose, 128)) / (df$Close * df$Volatility / 16) * 2.79
-      #   df$Forecast64 <- (EMA(df$AdjClose, 64) -  EMA(df$AdjClose, 256)) / (df$Close * df$Volatility / 16) * 1.91
-      #   df$Forecast128 <- (EMA(df$AdjClose, 128) -  EMA(df$AdjClose, 512)) / (df$Close * df$Volatility / 16) * 1.50
-      #   df$Acc16 <- c(rep(NA, 16), diff(df$Forecast16, 16)) * 1.90
-      #   df$Acc32 <- c(rep(NA, 32), diff(df$Forecast32, 32)) * 1.98
-      #   df$Acc64 <- c(rep(NA, 64), diff(df$Forecast64, 64)) * 2.05
-      #   df$Acc128 <- c(rep(NA, 128), diff(df$Forecast128, 128)) * 2.10
-      #   df$ForecastTest <- cap_forecast(rowMeans(cbind(df$Acc16 , df$Acc32 , df$Acc64, df$Acc128)) * 1.55)
-      # }
+      if(weights[["Test"]]  > 0) {
+        df$Forecast16 <- (EMA(df$AdjClose, 16) -  EMA(df$AdjClose, 64)) / (df$Close * df$Volatility / 16) * 4.1
+        df$Forecast32 <- (EMA(df$AdjClose, 32) -  EMA(df$AdjClose, 128)) / (df$Close * df$Volatility / 16) * 2.79
+        df$Forecast64 <- (EMA(df$AdjClose, 64) -  EMA(df$AdjClose, 256)) / (df$Close * df$Volatility / 16) * 1.91
+        df$Forecast128 <- (EMA(df$AdjClose, 128) -  EMA(df$AdjClose, 512)) / (df$Close * df$Volatility / 16) * 1.50
+        df$Acc16 <- c(rep(NA, 16), diff(df$Forecast16, 16)) * 1.90
+        df$Acc32 <- c(rep(NA, 32), diff(df$Forecast32, 32)) * 1.98
+        df$Acc64 <- c(rep(NA, 64), diff(df$Forecast64, 64)) * 2.05
+        df$Acc128 <- c(rep(NA, 128), diff(df$Forecast128, 128)) * 2.10
+        df$ForecastTest <- cap_forecast(rowMeans(cbind(df$Acc16 , df$Acc32 , df$Acc64, df$Acc128)) * 1.55)
+      }
       
       # COT
       # COT <- read_csv("/home/marco/trading/Systems/Monopoly/COT.csv")
@@ -1064,27 +1074,27 @@ print(res$Aggregate %>% unlist)
       # }
       }  
       # Final trade
-      df$Forecast <- ( weights[["Trend"]] * df$ForecastTrend + 
+      df$Forecast <- ( weights[["Long"]] * df$ForecastLong + 
+                       weights[["Trend"]] * df$ForecastTrend + 
                        weights[["Carry"]] * df$ForecastCarry + 
                        weights[["CSM"]] * df$ForecastCSM + 
                        weights[["Skew"]] * df$ForecastSkew + 
-                       weights[["Test"]] * df$ForecastTest) / 10 
-      df$Forecast <- lag(df$Forecast)
-      df$Excess <- df$Return * df$Position * df$Forecast * IDM 
+                       weights[["Test"]] * df$ForecastTest) 
+      df$Forecast <- cap_forecast(df$Forecast * FDM)
+      df$Excess <- lag(df$Position * df$Forecast/10) * df$Return * IDM 
       df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 
       exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast) %>% select(Date, Exposure) 
       returns[[symbol]]  <-  select(df, Date, Return)
       vols[[symbol]]  <-  select(df, Date, Volatility)
       results[[symbol]] <- select(df, Date, Excess)
+      strategies[[symbol]]  <-  dplyr::select(df, Date, ForecastLong, ForecastTrend, ForecastCarry, ForecastCSM,ForecastSkew, ForecastTest)
     } # end of symbol sloop
     
     print("")
     portfolio <- merge_portfolio_list(results)
     portfolio_weights <- 1 / length(names(Assets)) # equal weights per instrument
     res <- portfolio_summary(as.matrix(portfolio[,-1]) * portfolio_weights, dates = portfolio$Date, plot_stats = TRUE, symbol_wise = symbol_wise  ) 
-    print(res$Aggregate %>% unlist)
-    res <- portfolio_summary(as.matrix(portfolio[,-1]) * portfolio_weights, dates = as.Date(portfolio$Date), plot_stats = TRUE, symbol_wise = symbol_wise) 
     print(res$Aggregate %>% unlist)
     all_forecasts <- do.call(rbind,forecasts)[,2] %>% na.omit
     avg_forecast_turnover <- round(252 * mean(abs(diff(all_forecasts/10))), 2)
@@ -1108,6 +1118,8 @@ print(res$Aggregate %>% unlist)
   }
   
 }
+# Forecast daily SD on CMC_selection:  0.9717138
+#
 # Correlation between trend filters
 # > cor(cbind(ema, as, dc, rsi, tii, carry), use="pairwise.complete.obs")
 #               ema          as        dc        rsi         kf       tii       carry
@@ -1174,21 +1186,24 @@ print(res$Aggregate %>% unlist)
     optimal_positions <- positionoptimal[i,-1] %>% unlist
     FX <- fx[i,-1] %>% unlist
     closes <- pricecloses[i,-1] %>% unlist
+    frs <- fr[i,-1] %>% unlist
     spreads <- symbolspreads[i,-1] %>% unlist
     fractionals <- (positionmax[i,-1] %>% unlist)/20
     sizes <- contractsizes[i,-1] %>% unlist
     max_positions <- positionmax[i,-1] %>% unlist
     min_positions <- positionmin[i,-1] %>% unlist
+    vols <- volatilities[i,-1] %>% unlist
     positions_ticks <- positionticks[i,-1] %>% unlist
     notional_exposures <- (sizes * closes / FX) %>% unlist
     costs_per_contract <-   ((sizes * spreads/2) / FX) %>% unlist
-    optimized_positions <- dynamic_portfolio(capital, optimal_positions, notional_exposures,  cov_matrix, 
+    costs_per_contract <-   ( spreads/2/closes/(target_vol/vols)/10 ) %>% unlist
+    optimized_positions <- dynamic_portfolio(10*length(closes), frs, rep(1, length(closes)),  cov_matrix, 
                                              previous_position = previous_positions, max_positions = NULL, 
                                              min_positions = NULL,  costs_per_contract=costs_per_contract, 
-                                             trade_shadow_cost = 1, fractional = fractionals)
+                                             trade_shadow_cost = 50, fractional = rep(1, length(closes)))
     positionsoptimized[i,] <- optimized_positions
-    res <- buffering_portfolio(capital, optimized_positions, previous_positions, notional_exposures, cov_matrix, 0.25, 0.025)
-    positionsbuffered[i,] <- round_position(positionsbuffered[i-1,] + res[[1]], min_positions, positions_ticks)
+    res <- buffering_portfolio(10*length(closes), optimized_positions, previous_positions, rep(1, length(closes)), cov_matrix, 0.25, 0.01)
+    positionsbuffered[i,] <- positionsbuffered[i-1,] + res[[1]]
     previous_positions <- positionsbuffered[i,]
   }
   positionsoptimized <- data.frame(Date=full$Date, positionsoptimized); 
@@ -1196,7 +1211,10 @@ print(res$Aggregate %>% unlist)
   }
 }
 # Calculate turnover  
-finalpositions <- positionsbuffered
+finalpositions <- positionsbuffered %>% arrange(Date)
+portfolio <- lag(finalpositions[,-1]/10 * target_vol/volatilities[,-1]) * returns[,-1]
+res <- portfolio_summary(as.matrix(portfolio),  plot_stats = TRUE, symbol_wise = TRUE) 
+print(unlist(res$Aggregate))
 all_forecasts <- unlist(finalpositions[,-1])
 avg_trade_turnover <- round(length(rle(all_forecasts>0)$length) / (length(all_forecasts)/252), 2)
 print(paste("Average Trade Turnover:", avg_trade_turnover))
