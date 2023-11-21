@@ -929,7 +929,7 @@ print(res$Aggregate %>% unlist)
                        "ES","ZW","HS","NY","LX")
     CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ES","ZW","HS")
     Assets_all <- BackAdj 
-    Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
+    Assets <- BackAdj # or BackAdj[CMC_selection]
     results <- list()
     forecasts <- list()
     exposures <- list()
@@ -942,8 +942,8 @@ print(res$Aggregate %>% unlist)
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1.5
-    starting_year <- 2003
+    FDM <- 1.5^0
+    starting_year <- 1980
     # Apply relative volatility
     relative_vol <- FALSE
     # Apply Marker Correlation
@@ -951,7 +951,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=1, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1298,4 +1298,12 @@ full$h <- full$Cond_abs
 a <- full %>% filter(!is.na(h)) %>% group_by(f, h) %>% summarize(SR_m=median(SR, na.rm=T), SR_s=mad(SR, na.rm=T)/sqrt(n()))
 ggplot(a ) + geom_line(aes(f, SR_m, color=h)) +  geom_errorbar(aes(f, y=SR_m, ymin=SR_m-SR_s, ymax=SR_m+SR_s, color=h)) + theme(text = element_text(size=32))
 full %>% NaRV.omit() -> full; lapply(unique(full$f), function(x) t.test(full$sr[full$f==x & full$h], full$sr[full$f==x & !full$h])$statistic  ) %>% unlist
+
+
+
+lapply(all, function(df) mutate(df, Excess= lag(target_vol / Volatility * ForecastTrend/10) * Return * IDM * Weight )) ->all
+ df <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), all) %>% arrange(Date)
+ 
+excesses <- df[,grep("^Date|^Excess", colnames(df))];colnames(excesses) <- c("Date", names(all))
+     res <- portfolio_summary(as.matrix(excesses[,-1]), dates = excesses$Date, plot_stats = TRUE, symbol_wise = TRUE  ) 
 

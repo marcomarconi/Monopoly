@@ -372,7 +372,7 @@ dry_run <- opt$dryrun
     if(hc_value < 0)
       hc_value <- 0
     df$ForecastCarry <- ifelse(hc_max == 1, 1, -1) * hc_value / df$Volatility * 10 
-    df$ForecastCarry <- (df$ForecastCarry )
+    df$ForecastCarry <- cap_forecast(df$ForecastCarry * FDMcarry)
     
     # Skewness (strategy 24)
     df$ForecastSkew <- multiple_Skew(df$Return) 
@@ -464,7 +464,7 @@ dry_run <- opt$dryrun
   print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% 
-    dplyr::select(Date, Close, Symbol, PositionChange, Position, PositionPrevious, RequiredTrade, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
+    dplyr::select(Date, Close, Symbol, PositionChange, Position, PositionPrevious, PositionMax, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(as.data.frame(trades))
   # Write to file
   if(!dry_run) {
