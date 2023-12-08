@@ -198,7 +198,7 @@
   logs_dir <- paste0(main_dir, "Logs/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.33
-  IDM = 2.56 # relaculated using CMC data 
+  IDM = 2.5  
   FDMtrend <- 1.19 # from ATFS book
   FDMcarry <- 2.85 # relaculated using CMC data 
   FDMskew <- 1.21 # relaculated using CMC data and the skew rules above
@@ -338,7 +338,7 @@ dry_run <- opt$dryrun
     df$PositionTick <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(PositionTick)
     df$Spread <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Spread)
     df$Commission <- dplyr::filter(instruments_info, Symbol == symbol) %>% pull(Commission)
-    df$CostPerTrade <- (df$Spread / 2 + df$Commission) 
+    df$RiskAdjCost <- df$Spread / df$Close / df$Volatility
     
     # Relative volatility (strategy 13, it does not seems to add much)
     {

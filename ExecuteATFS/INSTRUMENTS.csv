@@ -1,5 +1,5 @@
 URL,Symbol,Platform,Buy,Sell,Product,Class1,Class2,ContractSize,PositionMin,PositionTick,FX,Decimals,Spread,Commission,Tradable
-soybean-cash,zs,CMC,NA,NA,Future,Grains,SoyCrush,0.01,50,0.1,USD,2,1.5,0,1
+soybean-cash,zs,CMC,NA,NA,Future,Grains,SoyCrush,0.01,50,0.1,USD,2,1.5,0,0
 soybean-oil-cash,zl,CMC,NA,NA,Future,Grains,SoyCrush,0.01,2000,1,USD,3,0.09,0,0
 soybean-meal-cash,zm,CMC,NA,NA,Future,Grains,SoyCrush,1,2,0.001,USD,2,0.7,0,0
 rough-rice-cash,zr,CMC,NA,NA,Future,Grains,Rice,1,50,0.01,USD,3,0.04,0,1
@@ -32,7 +32,7 @@ us-t-note-10-yr-cash,zn,CMC,NA,NA,Future,Equity_Debt,Debt,1,0.01,0.01,USD,3,0.03
 euro-bund-cash,gg,CMC,NA,NA,Future,Equity_Debt,Debt,1,1,0.01,EUR,3,0.028,0,1
 uk-gilt-cash,g,CMC,NA,NA,Future,Equity_Debt,Debt,1,0.01,0.01,GBP,3,0.02,0,0
 france-40-cash,mx,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.05,0.01,EUR,2,1,0,0
-us-spx-500-cash,es,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.01,0.01,USD,2,0.5,0,1
+us-spx-500-cash,es,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.01,0.01,USD,2,0.5,0,0
 hong-kong-50-cash,hs,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.01,HKD,1,5,0,1
 japan-225-cash,ny,CMC,NA,NA,Index,Equity_Debt,Equity,1,1,0.01,JPY,2,7,0,0
 south-africa-40-cash,lx,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.01,ZAR,1,10,0,0

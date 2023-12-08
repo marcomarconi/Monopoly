@@ -59,16 +59,16 @@ df <- Oils[c("CB", "CL", "RB", "HO", "LF")] %>% do.call(rbind, .) %>% filter(yea
 a <- mutate(df, dom=wday(Date), date=yearweek(Date), Symbol=factor(Symbol)) %>% 
     mutate(Cost = case_when(Symbol == "CB" ~ 0.0003, Symbol == "CL" ~ 0.0003, Symbol == "RB" ~ 0.001, 
                             Symbol == "HO" ~ 0.001,  Symbol == "LF" ~ 0.0007,TRUE ~ 0)) %>% 
-    mutate(Trade = case_when(dom <= 3 & Basis < 0 ~ -1 , dom > 3 & Basis > 0   ~ 1, TRUE ~ 0)) %>% 
+    mutate(Trade = case_when(dom <= 3 & Basis < 0 ~ -1 , dom > 3 & Basis > 0~ 1 , TRUE ~ 0)) %>% 
     mutate(Position = 0.25 / calculate_volatility(Return)) %>% 
     mutate(Excess = ifelse(is.na(Return), 0, Return*Trade*Position)) %>% 
     group_by(date, Symbol) %>% summarise(Excess=sum(Excess, na.rm=TRUE), Trades=first(length(rle(Trade[Trade!=0]))), Cost=first(Cost*Trades)) %>% group_by(Symbol) %>% 
     summarise(date=as.Date(date),PnL=cumsum(Excess-Cost),Excess=Excess-Cost, Cost=Cost, Symbol=as.character(Symbol)) %>% 
     mutate(Symbol = case_when(Symbol == "CB" ~ "Brent", Symbol == "CL" ~ "WTI", Symbol == "RB" ~ "Gasoline", 
                               Symbol == "HO" ~ "Heating Oil",  Symbol == "LF" ~ "Gasoil",TRUE ~ Symbol))
-ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) + scale_color_colorblind() + ylim(0, 6)+
+ggplot(a) + geom_line(aes(date, PnL, color=Symbol), linewidth=2) + scale_color_colorblind() + 
     theme(text= element_text(size=48), legend.title = element_blank(), legend.key.width = unit(2, "line"), axis.title.x = element_blank()) 
-a %>% summarise(mean(Excess)/sd(Excess)*sqrt(52))
+a %>% summarise(Sharpe=mean(Excess)/sd(Excess)*sqrt(52))
 # > strategy_performance(filter(a, Symbol=="Brent") %>% pull(Excess), filter(a, Symbol=="Brent") %>% pull(date), period=52) %>% unlist
 # Mean annual return      Annualized SD       Sharpe ratio               Skew         Lower tail         Upper tail 
 #             17.89              16.50               1.12              -0.27               1.63               1.10 

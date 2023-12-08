@@ -12,6 +12,7 @@
   library(Rfast)
   source("/home/marco/trading/Systems//Common/Indicators.R")
   source("/home/marco/trading/Systems//Common/Reports.R")
+  source("/home/marco/trading/Systems//Common/RiskManagement.R")
   
 }
 
@@ -1084,7 +1085,7 @@ print(res$Aggregate %>% unlist)
       df$Excess <- lag(df$Position * df$Forecast/10) * df$Return * IDM 
       df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 
-      exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast) %>% select(Date, Exposure) 
+      exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast/10) %>% select(Date, Exposure) 
       returns[[symbol]]  <-  select(df, Date, Return)
       vols[[symbol]]  <-  select(df, Date, Volatility)
       results[[symbol]] <- select(df, Date, Excess)
