@@ -928,23 +928,23 @@ print(res$Aggregate %>% unlist)
     CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
                        "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
                        "ES","ZW","HS","NY","LX")
-    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ES","ZW","HS")
+    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","HS")
     Assets_all <- BackAdj 
-    Assets <- BackAdj # or BackAdj[CMC_selection]
+    Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
     results <- list()
     forecasts <- list()
     exposures <- list()
     returns <- list()
     vols <- list()
     strategies <- list()
-    target_vol <- 0.25
+    target_vol <- 0.33
     IDM = 2.5
     FDMtrend <- 1.33
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1.5^0
-    starting_year <- 1980
+    FDM <- 1.5
+    starting_year <- 2023
     # Apply relative volatility
     relative_vol <- FALSE
     # Apply Marker Correlation
@@ -1147,7 +1147,15 @@ print(res$Aggregate %>% unlist)
 # acc                     -0.05            0.81            0.00          -0.26          1.00
 
 
-
+# Loading scraped CMC data, use it as input in the backtest
+{
+  CMC <- list()
+  dir <- "/home/marco/trading/Systems/Monopoly/ExecuteATFS/Data/Current"
+  for(file in list.files(dir, ".*csv")){
+    df <- read_csv(paste0(dir,"/",file), show_col_types = FALSE) %>% mutate(AdjClose=Close)
+    CMC[[file]] <- df
+  }
+}
 
 # ## some backtesting on real CMC data (the variable all come from live trading in ExecuteATFS.R)
 {

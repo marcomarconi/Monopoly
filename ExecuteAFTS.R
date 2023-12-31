@@ -80,6 +80,7 @@
       stop(paste("Duplicate dates in ", symbol))
     if(tail(df$Date, 1) != today())
       warning(paste("Last date does not correspond to today in ", symbol))
+    df$Close <- as.numeric(df$Close) # sometimes it is loaded as character
     return(df)
   }
 
@@ -193,9 +194,10 @@
   FX_file <- paste0(main_dir, "FX.csv")
   scrape_dir <- paste0(main_dir, "Data/Scrape/")
   historical_dir <- paste0(main_dir, "Data/Historical/")
-  current_dir <- paste0(main_dir, "Data/Scrape/")
+  current_dir <- paste0(main_dir, "Data/Current/")
   FX_dir <- paste0(main_dir, "FX/")
   logs_dir <- paste0(main_dir, "Logs/")
+  plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.33
   IDM = 2.5  
@@ -297,7 +299,7 @@ dry_run <- opt$dryrun
   # the covariance matrix
   print("Calculate covariance matrix...")
   closes <- lapply(instruments_data, function(x)x[[1]] %>% select(Date, Close))
-  closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) 
+  closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) %>% na.locf(na.rm=F)
   colnames(closes_merged) <- c("Date", names(instruments_data))
   daily_returns <- data.frame(Date=as.Date(closes_merged$Date), apply(closes_merged[,-1], 2, function(x) c(0, diff(log(x)))))
   daily_returns <- na.omit(daily_returns) # Potentially dangerous?
@@ -309,7 +311,12 @@ dry_run <- opt$dryrun
   last_day_vol <- tail(vols, 1)[-1]
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <-  names(instruments_data)
-
+  if(!dry_run) {
+    png(paste0(plots_dir, "/", today_string, "_Cor_matrix.png"), width = 800, height = 600)
+    heatmap(abs(cor_matrix[tradable_symbols,tradable_symbols]), Rowv = NA, Colv = NA, cexCol = 2, cexRow = 2)
+    dev.off()
+  }
+  
   # iterate over data and calculate positions
   print("Calculate new positions...")
   all <- list()
