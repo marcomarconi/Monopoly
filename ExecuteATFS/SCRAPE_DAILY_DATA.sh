@@ -48,8 +48,8 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6 w7 w8 w9 w10; do
   scrape_tmp=_scrape.$f.html
   curl -sS "https://query1.finance.yahoo.com/v7/finance/download/$f?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
   sed -i 's/null/NA/g' $scrape_tmp
-  cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $scrape_dir/$w2/$today.$w2.daily
-  head -n 2 $scrape_dir/$w2/$today.$w2.daily > $scrape_dir/$w2/$today.$w2.weekly # fake weekly data
+  cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $scrape_dir/$w2/$today.$w2.intraday # not really intraday, but we call it like this in compatibility with above CMC data
+  head -n 2 $scrape_dir/$w2/$today.$w2.intraday > $scrape_dir/$w2/$today.$w2.weekly # fake weekly data
   echo "$today_dash,$w4,$w5" > $scrape_dir/$w2/$today.$w2.holding_cost
   rm $scrape_tmp
 done <<< `tail -n+2 $instruments_file` 

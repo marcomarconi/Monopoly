@@ -32,7 +32,8 @@ us-t-note-10-yr-cash,zn,CMC,NA,NA,Future,Equity_Debt,Debt,1,0.01,0.01,USD,3,0.03
 euro-bund-cash,gg,CMC,NA,NA,Future,Equity_Debt,Debt,1,1,0.01,EUR,3,0.028,0,1
 uk-gilt-cash,g,CMC,NA,NA,Future,Equity_Debt,Debt,1,0.01,0.01,GBP,3,0.02,0,0
 france-40-cash,mx,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.05,0.01,EUR,2,1,0,0
-us-spx-500-cash,es,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.01,0.01,USD,2,0.5,0,0
-hong-kong-50-cash,hs,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.01,HKD,1,5,0,1
+us-spx-500-cash,es,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.001,USD,2,0.5,0,1
+hong-kong-50-cash,hs,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.0001,HKD,1,5,0,1
 japan-225-cash,ny,CMC,NA,NA,Index,Equity_Debt,Equity,1,1,0.01,JPY,2,7,0,0
 south-africa-40-cash,lx,CMC,NA,NA,Index,Equity_Debt,Equity,1,0.1,0.01,ZAR,1,10,0,0
+BTC-USD,bt,yahoo,-0.35,0.1,Index,Equity_Debt,Equity,1,0.005,0.001,USD,3,75,0,1

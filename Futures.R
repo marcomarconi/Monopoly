@@ -33,7 +33,7 @@ load_future_contracts <- function(symbol, dir, order_years=c(80:99,0:30), order_
     files[[sub(".csv", "", l)]] <- f
   }
   # Join all the contracts and sort them by Date and contracts order
-  df <- Reduce(function(...) full_join(..., by="Date", all=T), files) %>% arrange(Date)
+  df <- Reduce(function(...) full_join(..., by="Date"), files) %>% arrange(Date)
   colnames(df) <- c("Date", names(files))
   df <- as.data.frame(df)
   #order <- scan(paste0(dir, "/", order_file), what="string") %>% tolower()
@@ -74,12 +74,15 @@ backadjust_future <- function(df, N=1, period=365) {
   maturity <- rep(NA, nrow(m)); # days to maturity
   difference <- rep(NA, nrow(m)); # returns considering rollover (in price differences)
   ret <- rep(NA, nrow(m)); # returns considering rollover (in log price)
+  constant <- rep(NA, nrow(m)); # hypothetical constant maturity contract (using the next two contracts)
+  constant_ret <- rep(NA, nrow(m)); # hypothetical constant maturity contract log return (using the next two contracts)
   first <- NA # first value to use to adjust
   last <- 0 # last value to use to adjust
   for(i in 3:(nrow(m)-1)) { # this assume first and last entries are Inf
     ret[i] <- log(m[i,j] / m[i-1,j])
     difference[i] <- m[i,j] - m[i-1,j]  
-    if(j < ncol(m) && i >= ec[j]-N+2) { # we have not reached the last contract and we have not reached the last holding day
+    # we have not reached the last contract but we have reached the last holding day, we roll to the next contract
+    if(j < ncol(m) && i >= ec[j]-N+2) { 
       j <- j + 1;
       rollover[i] <- TRUE
       ret[i] <- log(m[i,j] / m[i-1,j])
@@ -89,13 +92,24 @@ backadjust_future <- function(df, N=1, period=365) {
     adjclose[i] <- m[i,j] - m[i-1,j]
     contract[i] <- colnames(m)[j]
     maturity[i] <- ec[j] - i
+    # we have not reached the last contract
     if(j < ncol(m)) {
       k <- ifelse(j+1 > ncol(m), ncol(m), j+1 )
       basis[i] <- log(m[i,j]) - log(m[i,k]) # simple log difference between contracts
       basis_price[i] <- m[i,j] - m[i,k] # simple price difference between contracts
       basis_distance[i] <- ym[k] - ym[j] # distance in months
       basis_gordon[i] <- period * ((m[i,j] / m[i,k]) - 1) / ((ec[k]-i) - (ec[j]-i)) # as defined in Gorton et al. 2013
-      #spot[i] <-  m[i,j] * (1 + basis[i] / period * (ec[j]-i)) # as defined in Gorton et al. 2013
+      spot[i] <-  m[i,j] * (1 + basis[i] / period * (ec[j]-i)) # as defined in Gorton et al. 2013
+      maturity1 <- maturity[i] - 1 
+      maturity2 <- ec[j+1] - i - 1
+      dist1 <- abs(maturity1 - 30) 
+      dist2 <- abs(maturity2 - 30) 
+      if(min(dist1, dist2) >= 30)
+        w <- 1
+      else
+        w <- ((dist1 + dist2) - dist1) / (dist1 + dist2) 
+      constant[i] <- w * m[i,j] + (1-w) * m[i,j+1]
+      constant_ret[i] <- w * log(m[i,j]/m[i-1,j]) + (1-w) * log(m[i,j+1]/m[i-1,j+1])
     }
     if(!(is.na(m[i,j]) | is.nan(m[i,j]))) {
       last <- m[i,j]
@@ -103,15 +117,18 @@ backadjust_future <- function(df, N=1, period=365) {
         first <- m[i,j]
     }
   } 
+  # backadjust the price
   adjclose[is.na(adjclose)] <- 0
   adjclose <- first + cumsum(adjclose)
   adjclose <- adjclose + (last - adjclose[length(adjclose)])
+  # the final data frame
   final <- data.frame(
     Date=df[,1], Close=close, AdjClose=adjclose, Return=ret, Difference=difference, Adjs=adjclose-close, 
     Contract=contract, Rollover=rollover, Maturity=maturity,
-    Basis=basis, Basis_price=basis_price, Basis_gordon=basis_gordon, Basis_distance=basis_distance, Spot=spot )
+    Basis=basis, Basis_price=basis_price, Basis_gordon=basis_gordon, Basis_distance=basis_distance, Spot=spot, Constant=constant, Constant_return=constant_ret)
+  # if a row has all NAs (probably because it just stored a Nan in the original data), remove it from the final result
   delete <- c()
-  for(i in 1:nrow(m)) # if a row wall all NAs (probably because it just stored a Nan) in the original data, remove it from the final result
+  for(i in 1:nrow(m))
     if(all(is.na(m[i,])))
       delete <- c(delete, i)
   if(length(delete) > 0)
@@ -138,14 +155,7 @@ backadjust_spread <- function(df1, df2, N1=1, N2=1, mult=c(1,1), func=backadjust
                     Close=close, AdjClose=backadj, Return=z$Return.x-z$Return.y))
 }
 
-# Load future contracts, we expect all the contract to be in the directory, and the contract order in the file order.txt
-load_cash_contract <- function(f) {
-  df <- read_csv(f, show_col_types = FALSE) %>% 
-    select(Time, Last) %>% rename(Date=Time) %>% mutate(Date = as.Date(Date, format="%m/%d/%Y")) %>%    arrange(f, Date) %>% 
-    mutate(Symbol=toupper(sub("y00.csv", "", f)), Return = c(0,diff(log(Last))) ) 
-  
-  return(df)
-}
+
 
 
 
@@ -221,7 +231,7 @@ intramarket_spread <- function(df, N=1, D=1) {
 # Load futures data and calculate stuff
 {
   stop()
-  setwd( "/home/marco/trading/Historical Data/Barchart/")
+  setwd( "/home/marco/trading/HistoricalData/Barchart/")
   to_load <- read_csv("Instrument_List.csv")
   # load the full futures contracts
   Futures <- list()
@@ -233,7 +243,7 @@ intramarket_spread <- function(df, N=1, D=1) {
     dir <- as.character(to_load[i,2])
     Futures[[symbol]] <- load_future_contracts(symbol, dir)
   }
-  write_rds(Futures, "/home/marco/trading/Historical Data/Barchart/Futures.RDS")
+  write_rds(Futures, "/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
   # Backadjust the prices
   BackAdj <- list()
   for(symbol in names(Futures)) {
@@ -246,7 +256,7 @@ intramarket_spread <- function(df, N=1, D=1) {
     BackAdj[[symbol]]$Name <- to_load$Name[to_load$Symbol == symbol]
     BackAdj[[symbol]]$Class <- to_load$Class[to_load$Symbol == symbol]
   }
-  write_rds(BackAdj, "/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
+  write_rds(BackAdj, "/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
   # Calculate the forward curve ?
   Basis <- list()
   for(a in  names(Futures)) 

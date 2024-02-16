@@ -17,8 +17,8 @@
 }
 
 
-Futures <- read_rds("/home/marco/trading/Historical Data/Barchart/Futures.RDS")
-BackAdj <- read_rds("/home/marco/trading/Historical Data/Barchart/BackAdj.RDS")
+Futures <- read_rds("/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
+BackAdj <- read_rds("/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
 
 # All book's strategies
 {
@@ -928,7 +928,7 @@ print(res$Aggregate %>% unlist)
     CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
                        "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
                        "ES","ZW","HS","NY","LX")
-    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","HS")
+    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","HS","ES","BT")
     Assets_all <- BackAdj 
     Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
     results <- list()
@@ -937,14 +937,14 @@ print(res$Aggregate %>% unlist)
     returns <- list()
     vols <- list()
     strategies <- list()
-    target_vol <- 0.33
+    target_vol <- 0.25
     IDM = 2.5
     FDMtrend <- 1.33
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
     FDM <- 1.5
-    starting_year <- 2023
+    starting_year <- 2003
     # Apply relative volatility
     relative_vol <- FALSE
     # Apply Marker Correlation
@@ -1005,7 +1005,7 @@ print(res$Aggregate %>% unlist)
         df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
-        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII)) * FDMtrend * df$M * df$Cor
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII), na.rm = T) * FDMtrend * df$M * df$Cor
         df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
       }
       # Carry (strategy 10)
@@ -1234,6 +1234,7 @@ print(paste("Average Trade Turnover:", avg_trade_turnover))
 ## Carver post on Skew/Kurtosis
 # https://qoppac.blogspot.com/2019/10/skew-and-expected-returns.html
 # General plotting by symbol
+{
 func <- carver_ratio2
 Assets <- Symbols_D1_barchart
 res <- list()
@@ -1307,12 +1308,7 @@ full$h <- full$Cond_abs
 a <- full %>% filter(!is.na(h)) %>% group_by(f, h) %>% summarize(SR_m=median(SR, na.rm=T), SR_s=mad(SR, na.rm=T)/sqrt(n()))
 ggplot(a ) + geom_line(aes(f, SR_m, color=h)) +  geom_errorbar(aes(f, y=SR_m, ymin=SR_m-SR_s, ymax=SR_m+SR_s, color=h)) + theme(text = element_text(size=32))
 full %>% NaRV.omit() -> full; lapply(unique(full$f), function(x) t.test(full$sr[full$f==x & full$h], full$sr[full$f==x & !full$h])$statistic  ) %>% unlist
+}
 
 
-
-lapply(all, function(df) mutate(df, Excess= lag(target_vol / Volatility * ForecastTrend/10) * Return * IDM * Weight )) ->all
- df <- Reduce(function(...) full_join(..., by = "Date", all = TRUE, incomparables = NA), all) %>% arrange(Date)
- 
-excesses <- df[,grep("^Date|^Excess", colnames(df))];colnames(excesses) <- c("Date", names(all))
-     res <- portfolio_summary(as.matrix(excesses[,-1]), dates = excesses$Date, plot_stats = TRUE, symbol_wise = TRUE  ) 
 

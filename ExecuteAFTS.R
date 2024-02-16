@@ -22,7 +22,8 @@
 
   # for some reason, scrapped CMC daily data are leaded one day, check for example https://www.cmcmarkets.com/en-gb/instruments/coffee-arabica-jul-2023?search=1
   # weekly data is leaded 2 days
-  load_current_cmc_data <- function(symbol,  scrape_dir, load_daily=TRUE, load_weekly=TRUE, lagged=TRUE){
+  # IMPORTANT: currently we only consider intraday data from CMC, daily and weekly is not used
+  load_scraped_cmc_data <- function(symbol,  scrape_dir, load_daily=TRUE, load_weekly=TRUE, lagged=TRUE){
     symbol_dir <- paste0(scrape_dir, "/", symbol)
     df <- data.frame(Date=Date(), Close=as.numeric(), Period=as.character())
     # # load intra-day data
@@ -84,7 +85,7 @@
     return(df)
   }
 
-  load_current_cmc_hc <- function(symbol,  dir){
+  load_scraped_cmc_hc <- function(symbol,  dir){
     symbol_dir <- paste0(dir, "/", symbol)
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
@@ -97,11 +98,17 @@
     return(hc)
   }
   
-  load_historical_cmc_data <- function(symbol, dir){
+  load_current_cmc_data <- function(symbol, dir){
     symbol_file <- paste0(dir, "/", symbol, ".csv")
-    df <- fread(symbol_file) %>% mutate(Date=as.Date(Date)) %>% arrange(Date) 
+    df <- fread(symbol_file) %>% mutate(Date=as.Date(Date), Period="Daily") %>% arrange(Date) %>% select(Date, Close, Period)
     return(df)
   }
+  
+  # load_historical_cmc_data <- function(symbol, dir){
+  #   symbol_file <- paste0(dir, "/", symbol, ".csv")
+  #   df <- fread(symbol_file) %>% mutate(Date=as.Date(Date)) %>% arrange(Date) 
+  #   return(df)
+  # }
   
   
   multiple_EMA <- function(adjclose, close, volatility, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
@@ -193,13 +200,13 @@
   portfolio_file <- paste0(main_dir, "PORTFOLIO.csv")
   FX_file <- paste0(main_dir, "FX.csv")
   scrape_dir <- paste0(main_dir, "Data/Scrape/")
-  historical_dir <- paste0(main_dir, "Data/Historical/")
+  #historical_dir <- paste0(main_dir, "Data/Historical/")
   current_dir <- paste0(main_dir, "Data/Current/")
   FX_dir <- paste0(main_dir, "FX/")
   logs_dir <- paste0(main_dir, "Logs/")
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
-  target_vol <- 0.33
+  target_vol <- 0.4
   IDM = 2.5  
   FDMtrend <- 1.19 # from ATFS book
   FDMcarry <- 2.85 # relaculated using CMC data 
@@ -242,7 +249,7 @@ dry_run <- opt$dryrun
       dir.create(FX_dir)
   }
   
-  # load instruments infos and calculate instruments weights from asset classes groups (could be coded a little better maybe?)
+  # load instruments infos and calculate instruments weights from asset classes groups 
   print("Loading symbols info and previous positions file...")
   instruments_info <- read_csv(instrument_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
   tradable_symbols <- filter(instruments_info, Tradable==TRUE) %>% pull(Symbol)
@@ -265,16 +272,17 @@ dry_run <- opt$dryrun
   if(!dry_run)
     system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
 
-  # load price data from previous scrape
+  # load price data from previous scrape, we merge it we the current data. 
+  # Important: we expect the current dir contains already some data (with Date and Close columns), download it manually the very first time.
   print("Loading price data...")
   instruments_data <- list()
   for(symbol in instruments_info$Symbol) {
     cat(paste(symbol, ""))
-    historical_data <- load_historical_cmc_data(symbol, historical_dir)
-    current_data <- load_current_cmc_data(symbol, scrape_dir, load_daily = FALSE, load_weekly = FALSE)
-    symbol_data <- rbind(historical_data, current_data) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
-    current_hc <- load_current_cmc_hc(symbol, scrape_dir)
-    instruments_data[[symbol]] <- list(Price=symbol_data, HC=current_hc)
+    current_data <- load_current_cmc_data(symbol, current_dir) 
+    scraped_data <- load_scraped_cmc_data(symbol, scrape_dir, load_daily = FALSE, load_weekly = FALSE)
+    symbol_data <- rbind(current_data, scraped_data) %>% group_by(Date) %>% summarize(Date=last(Date), Close=last(Close), Period=last(Period)) %>% ungroup %>% arrange(Date) 
+    scraped_hc <- load_scraped_cmc_hc(symbol, scrape_dir)
+    instruments_data[[symbol]] <- list(Price=symbol_data, HC=scraped_hc)
     nas <- sum(is.na(instruments_data[[symbol]]$Price$Close))
     if(nas > 0) {
       warning(paste(symbol, "price data has", nas, "NAs. They have been filled"))
@@ -319,8 +327,8 @@ dry_run <- opt$dryrun
   
   # iterate over data and calculate positions
   print("Calculate new positions...")
-  all <- list()
-  results <- list()
+  all_days <- list()
+  last_day <- list()
   for(symbol in names(instruments_data)) {
     cat(paste(symbol, ""))
     df <- instruments_data[[symbol]][[1]]
@@ -349,19 +357,18 @@ dry_run <- opt$dryrun
     
     # Relative volatility (strategy 13, it does not seems to add much)
     {
-    # df$M <- 1
-    # df$RV <- relative_volatility(df$Volatility) # quite slow, you can replace it with df$Volatility / runMean(df$Volatility, 2520))
-    # df$RV <- df$Volatility / runMean(df$Volatility, 252)
-    # df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
-    # df$M <- EMA(2 - 1.5 * df$Q, 10)
+      df$M <- 1
+      # df$RV <- relative_volatility(df$Volatility) 
+      # df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
+      # df$M <- EMA(2 - 1.5 * df$Q, 10)
     }
     # Trend-following (strategy 9)
     df$multiple_EMA <- multiple_EMA(df$Close, df$Close, df$Volatility)
     df$multiple_DC <- multiple_DC(df$Close, df$Close, df$Volatility)
     df$multiple_KF <- multiple_KF(df$Close, df$Close, df$Volatility)
     df$multiple_TII <- multiple_TII(df$Close, df$Close, df$Volatility)
-    df$ForecastTrend <- rowMeans(cbind(df$multiple_EMA, df$multiple_DC, df$multiple_KF, df$multiple_TII), na.rm=T)
-    df$ForecastTrend <- cap_forecast(df$ForecastTrend * FDMtrend) 
+    df$ForecastTrend <- rowMeans(cbind(df$multiple_EMA, df$multiple_DC, df$multiple_KF, df$multiple_TII), na.rm=T) 
+    df$ForecastTrend <- cap_forecast(df$ForecastTrend * FDMtrend * df$M) 
     
     # Carry 
     # It is based on cash contract interest rate, we remove the 3% commission, so low volatility assets like
@@ -378,6 +385,8 @@ dry_run <- opt$dryrun
     # When carry is always against us (both long and short charge us), we assume it is zero
     if(hc_value < 0)
       hc_value <- 0
+    df$HoldingCostLong <- hc[1]
+    df$HoldingCostShort <- hc[2]
     df$ForecastCarry <- ifelse(hc_max == 1, 1, -1) * hc_value / df$Volatility * 10 
     df$ForecastCarry <- cap_forecast(df$ForecastCarry * FDMcarry)
     
@@ -399,16 +408,16 @@ dry_run <- opt$dryrun
       (df$ContractSize * df$Close) 
     df$Buffer <- (df$Exposure * df$FX * position_buffering_level/10) / (df$ContractSize * df$Close)
     df$Buffer <-  ifelse(df$Buffer < df$PositionMin, df$PositionMin, df$Buffer)
-    all[[symbol]] <- df
+    all_days[[symbol]] <- df
+    df <- arrange(df, desc(Date))
     if(!dry_run)
       write_csv(df, paste0(current_dir, "/", symbol, ".csv"))
     # Be careful, now it is reverse-date sorted, you cannot run any other function like EMA etc..
-    df <- arrange(df, desc(Date))
-    results[[symbol]] <- df[1,]
+    last_day[[symbol]] <- df[1,]
   }
   print("")
   # Final table
-  today_trading <- do.call(rbind, results)
+  today_trading <- do.call(rbind, last_day)
   if(!all(previous_trading$Symbol %in% today_trading$Symbol)) {
     missing_prev <- previous_trading$Symbol[!(previous_trading$Symbol %in% today_trading$Symbol)]
     missing_today <- today_trading$Symbol[!(today_trading$Symbol %in% previous_trading$Symbol)]
@@ -456,14 +465,9 @@ dry_run <- opt$dryrun
   w <- with(today_trading, Position * ContractSize * Close / FX / capital) %>% as.numeric
   portfolio_volatility <- round(as.numeric(sqrt(w %*% cov_matrix %*% w)) * 100, 2)
   print(paste("Portfolio volatility:", portfolio_volatility, "%"))
-  # Portfolio jump risk
-  jump <- lapply(results, function(x) quantile(x$Volatility, probs=0.99)) %>% unlist
-  jump_cov_matrix <- diag(jump) %*% cor_matrix %*% diag(jump)
-  portfolio_jump_risk <- round(sqrt(as.numeric(w %*% jump_cov_matrix %*% w)) * 100, 2)
-  print(paste("Portfolio jump risk:", portfolio_jump_risk, "%"))
   # Portfolio correlation risk
-  risks <- lapply(1:length(results), function(i) w[i] * tail(results[[i]]$Volatility, 1)) %>% unlist
-  portfolio_correlation_risk <- round(sum(abs(risks)), 2) * 100
+  risks <- lapply(1:length(all_days), function(i)  tail(all_days[[i]]$Volatility, 1)) %>% unlist
+  portfolio_correlation_risk <- round(sum(abs(w * risks)), 2) * 100
   print(paste("Portfolio correlation risk:", portfolio_correlation_risk, "%"))
   # Active positions
   portfolio_positions <- sum(today_trading$Position != 0)
@@ -480,7 +484,7 @@ dry_run <- opt$dryrun
     portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE) %>% as.data.frame()
     info <- tibble(Date=today_string, Symbols=portfolio_symbols, 
                        Positions=portfolio_positions, Tracking_Error=NA, Volatility=portfolio_volatility, 
-                       Jump_Risk=portfolio_jump_risk, Correlation_Risk=portfolio_correlation_risk)
+                       Jump_Risk=NA, Correlation_Risk=portfolio_correlation_risk)
     write_csv(rbind(info, portfolio_info), portfolio_file)
   }
 }
