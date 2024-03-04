@@ -127,44 +127,7 @@
     forecast <- rowMeans(do.call(cbind, DCs))
     return(forecast)
   }
-  KalmanFilterIndicator <- function(x, sharpness=1, K=1) {
-    n <- length(x)
-    value <- rep(NA, n)
-    distance <- rep(NA, n)
-    velocity <- rep(NA, n)
-    error <- rep(NA, n)
-    value[1] <- x[1]
-    velocity[1] <- 0
-    distance[1] <- 0
-    error[1] <- 0
-    for(i in 2:length(x)){
-      distance[i] <- x[i] - value[i-1]
-      error[i] <- value[i-1] + distance[i] * sqrt(sharpness * K / 100)
-      velocity[i] <- velocity[i-1] + distance[i]*K/100
-      value[i] <- error[i]+velocity[i]
-    }
-    return(cbind(value=value, velocity=velocity, distance=distance, error=error))
-  }
-  multiple_KF <- function(adjclose, close, volatility, spans=c(0.5, 1, 2, 5, 10), scalars=c(66, 55, 46, 37, 31), cap=20, period=252) {
-    n <- length(spans)
-    KFs <- lapply(1:n, function(i) KalmanFilterIndicator(adjclose, sharpness = 1, K = spans[i])[,2])
-    KFs <- lapply(1:n, function(i) KFs[[i]] / ((close * volatility / sqrt(period))) * scalars[i] )
-    KFs <- lapply(1:n, function(i) cap_forecast(KFs[[i]], cap))
-    forecast <- rowMeans(do.call(cbind, KFs))
-    return(forecast)
-  }
-  TII <- function(x, P = 60, ma=TTR::EMA) {
-    ma_p <- ma(x, P)
-    diff <- x - ma_p
-    pos_count <- runSum(diff>0, floor(P/2))
-    return(400 * (pos_count) / P - 100)
-  }
-  multiple_TII <- function(adjclose, close, volatility, spans=c(21, 63, 126, 252)) {
-    n <- length(spans)
-    TII <- lapply(1:n, function(i) TII(adjclose, P = spans[i]) / 5)
-    forecast <- rowMeans(do.call(cbind, TII))
-    return(forecast)
-  }
+  
   # basis and volatility are in percentage
   multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
     n <- length(spans)
@@ -178,8 +141,8 @@
   relative_volatility <- function(volatility, period=2520) {
     return(unlist(Map(function(i) mean(tail(volatility[1:i], period), na.rm=TRUE), 1:length(volatility))))
   }
-  # scalar have been readapted to fit CMC cash data
-  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(21.1, 21.8, 22.8), cap=20) {
+
+  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
     Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
@@ -208,9 +171,9 @@
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.4
   IDM = 2.5  
-  FDMtrend <- 1.19 # from ATFS book
-  FDMcarry <- 2.85 # relaculated using CMC data 
-  FDMskew <- 1.21 # relaculated using CMC data and the skew rules above
+  FDMtrend <- 1.2 # from ATFS book
+  FDMcarry <- 2.5 # relaculated using CMC data (2.85, and rounded to 2.5)
+  FDMskew <- 1.2 # relaculated using CMC data and the skew rules in the functions declared above
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25
@@ -365,9 +328,7 @@ dry_run <- opt$dryrun
     # Trend-following (strategy 9)
     df$multiple_EMA <- multiple_EMA(df$Close, df$Close, df$Volatility)
     df$multiple_DC <- multiple_DC(df$Close, df$Close, df$Volatility)
-    df$multiple_KF <- multiple_KF(df$Close, df$Close, df$Volatility)
-    df$multiple_TII <- multiple_TII(df$Close, df$Close, df$Volatility)
-    df$ForecastTrend <- rowMeans(cbind(df$multiple_EMA, df$multiple_DC, df$multiple_KF, df$multiple_TII), na.rm=T) 
+    df$ForecastTrend <- rowMeans(cbind(df$multiple_EMA, df$multiple_DC), na.rm=T) 
     df$ForecastTrend <- cap_forecast(df$ForecastTrend * FDMtrend * df$M) 
     
     # Carry 
@@ -452,10 +413,11 @@ dry_run <- opt$dryrun
     today_trading$AdjFactor <- NULL
     today_trading$RequiredTrade <- today_trading$PositionOptimal - today_trading$PositionPrevious
   }
-  # trade only if the required trade if bigger than buffer, bigger than position tick size and bigger than minumum position
+  # trade only if the required trade if bigger than buffer, bigger than position tick size and bigger than minimum position
   today_trading$Trading <- with(today_trading, 
                                 (abs(RequiredTrade) >= Buffer & abs(RequiredTrade) >= PositionTick & abs(RequiredTrade) >= PositionMin) | 
-                                  (abs(PositionPrevious) != 0 & PositionOptimal == 0)
+                                (abs(PositionPrevious) != 0 & PositionOptimal == 0)
+                                
   )
   today_trading$PositionUnrounded <- with(today_trading,  ifelse(Trading, PositionPrevious +  RequiredTrade, PositionPrevious))
   today_trading$Position <- with(today_trading,  round_position(PositionUnrounded, PositionMin, PositionTick))  

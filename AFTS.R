@@ -858,8 +858,8 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, Os))
     return(forecast)
   }
-  returns_skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
-    skewf <- Rfast::skew
+  
+  multiple_Skew <- function(returns, spans=c(60, 120, 240), scalars=c(33.3, 37.2, 39.2), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
     Skews <- lapply(1:n, function(i) -rollapply(returns, width=spans[i], skew,  fill=NA, align="right"))
@@ -869,21 +869,7 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, Skews))
     return(forecast)
   }
-  returns_skew_2 <- function(returns, spans=c(60, 120, 240), scalars=c(23, 24, 25), cap=20) {
-    n <- length(spans)
-    returns[is.na(returns)] <- 0
-    Skews <- lapply(1:n, function(i) {
-      mult <- min(spans[i]*10, length(returns)) 
-      x <- rollapply(returns, width=spans[i], skew,  fill=NA, align="right") ;
-      x[is.na(x)] <- 0
-      x - runMean(x, n = mult)
-    })
-    Skews <-  lapply(1:n, function(i) replace(Skews[[i]], is.na(Skews[[i]]), 0))
-    Skews <-  lapply(1:n, function(i) EMA(-Skews[[i]], ceiling(spans[i]/4)) * scalars[i])
-    Skews <- lapply(1:n, function(i) cap_forecast(Skews[[i]], cap))
-    forecast <- rowMeans(do.call(cbind, Skews))
-    return(forecast)
-  }
+  
   returns_kurtosis <- function(returns, spans=c(60, 120, 240), scalars=c(8, 5.70, 3.75), cap=20) {
     n <- length(spans)
     returns[is.na(returns)] <- 0
@@ -927,32 +913,25 @@ print(res$Aggregate %>% unlist)
     # A subset of instrument I might actually trade
     CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
                        "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
-                       "ES","ZW","HS","NY","LX")
+                       "ES","ZW","HS","NY","LX", "BT")
     CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","HS","ES","BT")
-    Assets_all <- BackAdj 
-    Assets <- BackAdj[CMC_selection] # or BackAdj[CMC_selection]
-    results <- list()
-    forecasts <- list()
-    exposures <- list()
-    returns <- list()
-    vols <- list()
-    strategies <- list()
+    Assets_all <- BackAdj[CMC_selection_]
+    Assets <- BackAdj[CMC_selection]
+    results <- list();  forecasts <- list();  exposures <- list();returns <- list(); vols <- list();strategies <- list()
     target_vol <- 0.25
     IDM = 2.5
     FDMtrend <- 1.33
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1.5
-    starting_year <- 2003
+    FDM <- 1. # 1.5
+    starting_year <- 2000
     # Apply relative volatility
     relative_vol <- FALSE
-    # Apply Marker Correlation
-    market_cor <- FALSE
     # Symbol-wise results
     symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=1, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
     # Asset class indices
@@ -981,18 +960,18 @@ print(res$Aggregate %>% unlist)
       # Relative volatility (strategy 13, improvement is minimal, and we only apply it to trend)
       df$M <- 1
       if(relative_vol) {
-        df$RV <- relative_volatility(df$Volatility) 
+        # Carver version
+        df$RV <- relative_volatility(df$Volatility)
         df$Q <- sapply(1:length(df$RV), function(i) sum(df$RV[i] > df$RV[1:i], na.rm=TRUE) / i)
         df$M <- EMA(2 - 1.5 * df$Q, 10)
+        # My version
+        # df$RV <- runquantile(df$Volatility, k = 252, probs = c(0.25,0.5,0.75), align="right")
+        # df <- mutate(df, M=case_when(Volatility < RV[,1] ~ 1.5,
+        #                                 Volatility < RV[,2] & Volatility > RV[,1] ~ 1.25,
+        #                                 Volatility < RV[,3] & Volatility > RV[,2] ~ 0.75,
+        #                                 Volatility > RV[,3] ~ 0.5,  TRUE ~ NA))
       }
-      
-      # Correlation with market
-      df$Cor <- 1
-      if(market_cor) {
-        df <- merge(df, select(BackAdj$ES, Date, Return) %>% mutate(ES=Return) %>% select(-Return), by="Date") 
-        df$Cor <- multiple_cor(df$Return %>% na.locf(na.rm=F), df$ES %>% na.locf(na.rm=F))
-        df$Cor <- -df$Cor * 0.75 + 1.25
-      }
+
       
       # Long-only
       if(weights[["Long"]]  > 0) {
@@ -1003,9 +982,7 @@ print(res$Aggregate %>% unlist)
       if(weights[["Trend"]]  > 0) {
         df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
-        df$ForecastKF <- multiple_KF(df$AdjClose, df$Close, df$Volatility) 
-        df$ForecastTII <- multiple_TII(df$AdjClose, df$Close, df$Volatility)
-        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC, df$ForecastKF, df$ForecastTII), na.rm = T) * FDMtrend * df$M * df$Cor
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC), na.rm = T) * FDMtrend * df$M * df$Cor
         df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
       }
       # Carry (strategy 10)
@@ -1022,12 +999,14 @@ print(res$Aggregate %>% unlist)
       }
       # Skewness (strategy 24)
       if(weights[["Skew"]]  > 0) {
-        df$ForecastSkew <- returns_skew(df$Return) * FDMskew  
+        df$ForecastSkew <- multiple_Skew(df$Return) * FDMskew  
         df$ForecastSkew <- cap_forecast(df$ForecastSkew)
       }
       
       if(weights[["Test"]]  > 0) {
-
+        df$ForecastTest <- -multiple_CR(df$Return) 
+        df$ForecastTest <- cap_forecast(df$ForecastTest)
+        
       }   
       
       {  # Tests
@@ -1037,19 +1016,7 @@ print(res$Aggregate %>% unlist)
       #   forecast <- rollapply(df$Return, width=20, kurt,  fill=NA, align="right")  
       #   df$ForecastTest <- cap_forecast(df$ForecastTest)
       # }
-      # Acceleration
-      if(weights[["Test"]]  > 0) {
-        df$Forecast16 <- (EMA(df$AdjClose, 16) -  EMA(df$AdjClose, 64)) / (df$Close * df$Volatility / 16) * 4.1
-        df$Forecast32 <- (EMA(df$AdjClose, 32) -  EMA(df$AdjClose, 128)) / (df$Close * df$Volatility / 16) * 2.79
-        df$Forecast64 <- (EMA(df$AdjClose, 64) -  EMA(df$AdjClose, 256)) / (df$Close * df$Volatility / 16) * 1.91
-        df$Forecast128 <- (EMA(df$AdjClose, 128) -  EMA(df$AdjClose, 512)) / (df$Close * df$Volatility / 16) * 1.50
-        df$Acc16 <- c(rep(NA, 16), diff(df$Forecast16, 16)) * 1.90
-        df$Acc32 <- c(rep(NA, 32), diff(df$Forecast32, 32)) * 1.98
-        df$Acc64 <- c(rep(NA, 64), diff(df$Forecast64, 64)) * 2.05
-        df$Acc128 <- c(rep(NA, 128), diff(df$Forecast128, 128)) * 2.10
-        df$ForecastTest <- cap_forecast(rowMeans(cbind(df$Acc16 , df$Acc32 , df$Acc64, df$Acc128)) * 1.55)
-      }
-      
+
       # COT
       # COT <- read_csv("/home/marco/trading/Systems/Monopoly/COT.csv")
       # select(COT, c("Market and Exchange Names", "As of Date in Form YYYY-MM-DD", "Noncommercial Positions-Long (All)","Noncommercial Positions-Short (All)", "Commercial Positions-Long (All)","Commercial Positions-Short (All)")) -> a
@@ -1074,6 +1041,7 @@ print(res$Aggregate %>% unlist)
       #     }
       # }
       }  
+      
       # Final trade
       df$Forecast <- ( weights[["Long"]] * df$ForecastLong + 
                        weights[["Trend"]] * df$ForecastTrend + 
@@ -1119,32 +1087,6 @@ print(res$Aggregate %>% unlist)
   }
   
 }
-# Forecast daily SD on CMC_selection:  0.9717138
-#
-# Correlation between trend filters
-# > cor(cbind(ema, as, dc, rsi, tii, carry), use="pairwise.complete.obs")
-#               ema          as        dc        rsi         kf       tii       carry
-# ema    1.00000000  0.98087784 0.9569068  0.9774590 0.77753903 0.7802132 -0.06468951
-# as     0.98087784  1.00000000 0.9815585  0.9973434 0.74095885 0.8442622 -0.02987404
-# dc     0.95690678  0.98155851 1.0000000  0.9819828 0.81395836 0.7945836  0.25337216
-# rsi    0.97745899  0.99734341 0.9819828  1.0000000 0.73057155 0.8526681 -0.01424110
-# kf     0.77753903  0.74095885 0.8139584  0.7305715 1.00000000 0.4338501  0.08733133
-# tii    0.78021325  0.84426222 0.7945836  0.8526681 0.43385009 1.0000000  0.35867119
-# carry -0.06468951 -0.02987404 0.2533722 -0.0142411 0.08733133 0.3586712  1.00000000
-# 
-# Best SR: DC
-# Best skew: KF
-# Best Tails: TII
-# Best correlation: KF
-# Best GPR: DC
-#
-# Correlation between strategies
-#                         benchmark       trend           carry           skew          acc
-# benchmark                1.00           -0.01           -0.15           0.33         -0.05
-# trend                   -0.01            1.00            0.26          -0.02          0.81
-# carry                   -0.15            0.26            1.00           0.17          0.00
-# skew                     0.33           -0.02            0.17           1.00         -0.26
-# acc                     -0.05            0.81            0.00          -0.26          1.00
 
 
 # Loading scraped CMC data, use it as input in the backtest
