@@ -10,6 +10,7 @@
   library(tsibble)
   library(data.table)
   library(ggthemes)
+  library(caTools)
   source("/home/marco/trading/Systems//Common/Common.R")
   source("/home/marco/trading/Systems//Common/Reports.R")
   source("/home/marco/trading/Systems//Common/Indicators.R")
@@ -32,6 +33,8 @@ load_future_contracts_wide <- function(symbol, dir, order_years=c(80:99,0:30), o
     f <- arrange(f, Date)
     f <- rbind(data.frame(Date=f$Date[1]-1, Last=NaN), f, data.frame(Date=f$Date[length(f$Date)]+1, Last=NaN))
     files[[sub(".csv", "", l)]] <- f
+    if(!all(table(f$Date)==1))
+      warning(paste("Double entry date found in contract: ", l))
   }
   # Join all the contracts and sort them by Date and contracts order
   df <- Reduce(function(...) full_join(..., by="Date"), files) %>% arrange(Date)
@@ -45,20 +48,26 @@ load_future_contracts_wide <- function(symbol, dir, order_years=c(80:99,0:30), o
 
 
 # Load future contracts in long format, we expect all the contract to be in the directory
-load_future_contracts_long <- function(symbol, dir, order_years=c(80:99,0:30), order_months=c("f", "g", "h", "j", "k", "m", "n", "q", "u", "v", "x", "z")) {
+load_future_contracts_long <- function(symbol, dir, expiry_df=NULL, order_years=c(80:99,0:30), order_months=c("f", "g", "h", "j", "k", "m", "n", "q", "u", "v", "x", "z")) {
   order_years <- sapply(order_years, function(x) ifelse(x < 10, paste0("0", as.character(x)), as.character(x)))
   order_comb <- apply(expand.grid(order_months, order_years), 1, function(x) tolower(paste0(symbol, paste0(x, collapse = ""))))
   files <- list()
   # load all the contracts
   for(l in list.files(dir, pattern = ".csv")) {
     symbol <- sub(".csv", "", l)
-    f <- fread(paste0(dir, "/", l))  %>% rename(Date=Time, Close=Last) %>% mutate(Symbol = symbol)
-    f$Date <- as.Date(f$Date, format="%m/%d/%Y") 
-    f <- arrange(f, Date) %>% mutate(Return = log(Close/lag(Close)))
-    files[[symbol]] <- f
+    df <- fread(paste0(dir, "/", l))  %>% rename(Date=Time, Close=Last) %>% mutate(Symbol = symbol)
+    df$Date <- as.Date(df$Date, format="%m/%d/%Y") 
+    df <- arrange(df, Date) %>% mutate(ReturnLog = log(Close/lag(Close)), ReturnPoint = Close-lag(Close))
+    files[[symbol]] <- df
   }
   # Concatenate all the contracts and sort them by contracts order
   df <- do.call(rbind, files[order_comb])
+  # Calculate DTE if expiry file is provided, otherwise use contract length (for non-yet expired contract this will return a wrong DTE)
+  if(is.null(expiry_df))
+    df <- group_by(df, Symbol) %>% arrange(Date) %>% mutate(Expiry=last(Date), DTE = as.numeric(Expiry - Date)) %>% relocate(DTE, .before=Expiry)
+  else {
+    df <- left_join(df, expiry_df %>% rename(Expiry=Date), by="Symbol") %>%  group_by(Symbol) %>% arrange(Date) %>% mutate(DTE = as.numeric(Expiry - Date)) %>% relocate(DTE, .before=Expiry)
+  }
   return(df)
 }
 
@@ -163,17 +172,11 @@ backadjust_future <- function(df, N=1, period=365) {
 }
 
 # build spreads from futures contracts in long format as returned by load_future_contracts_long
-build_spreads <- function(df, C=list(c(1,2)), expiry_df=NULL) {
+build_spreads <- function(df, C=list(c(1,2))) {
     N <- max(sapply(C, max))
     front_c <- sapply(C, function(x)x[1]) 
     back_c <- sapply(C, function(x)x[2]) 
-    # Calculate DTE if expiry file is provided, otherwise use contract length (for non-yet expired contract this will return a wrong DTE)
-    if(is.null(expiry_df))
-      contracts <- df %>%  group_by(Symbol) %>% arrange(Date) %>% mutate(DTE = (n()-1):0) 
-    else {
-      contracts <- left_join(df, expiry_df %>% rename(Expiry=Date), by="Symbol") %>%  group_by(Symbol) %>% arrange(Date) %>% mutate(DTE = as.numeric(Expiry - Date))
-    }
-    contracts <- contracts %>% group_by(Date) %>% mutate(Contract = row_number()) %>%  filter(Contract <= N)
+    contracts <- df %>% group_by(Date) %>% mutate(Contract = row_number()) %>%  filter(Contract <= N)
     if(max(contracts$Contract) < N)
       stop(paste("Max contract is lower than supplied", N))
     # Turn the prices and returns into a wide format
@@ -183,12 +186,12 @@ build_spreads <- function(df, C=list(c(1,2)), expiry_df=NULL) {
       pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = Close)
     dte <- contracts %>%  select(Symbol, Date, Contract, DTE) %>%
       pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = DTE)
-    returns <- contracts %>% select(Symbol, Date, Contract, Return) %>%
-      pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = Return)
+    returnspoint <- contracts %>% select(Symbol, Date, Contract, ReturnPoint) %>%
+      pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = ReturnPoint)
+    returnslog <- contracts %>% select(Symbol, Date, Contract, ReturnLog) %>%
+      pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = ReturnLog)
     volume <- contracts %>%   select(Symbol, Date, Contract, Volume) %>%
       pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = Volume)
-    oi <- contracts %>%    select(Symbol, Date, Contract, `Open Int`) %>%
-      pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = `Open Int`)
     expiry <- contracts %>%    select(Symbol, Date, Contract, Expiry) %>%
       pivot_wider(id_cols = -Symbol, names_from = Contract, names_prefix = 'c_', values_from = Expiry)
     dates <- prices[,1]
@@ -197,36 +200,46 @@ build_spreads <- function(df, C=list(c(1,2)), expiry_df=NULL) {
     symbol2 <- data.frame(dates, symbols[, back_c+1])
     price1 <- data.frame(dates, prices[, front_c+1])
     price2 <- data.frame(dates, prices[, back_c+1])
-    return1 <- data.frame(dates, returns[, front_c+1])
-    return2 <- data.frame(dates, returns[, back_c+1])
-    dtes <- data.frame(dates, dte[, front_c+1])
-    volumes <- data.frame(dates, volume[, front_c+1] + volume[, back_c+1])
-    ois <- data.frame(dates, oi[, front_c+1] + oi[, back_c+1])
-    expiries <- data.frame(dates, expiry[, front_c+1])
-    dtes <- data.frame(dates, dte[, front_c+1])
+    returnpoint1 <- data.frame(dates, returnspoint[, front_c+1])
+    returnpoint2 <- data.frame(dates, returnspoint[, back_c+1])
+    returnlog1 <- data.frame(dates, returnslog[, front_c+1])
+    returnlog2 <- data.frame(dates, returnslog[, back_c+1])
+    dte1 <- data.frame(dates, dte[, front_c+1])
+    dte2 <- data.frame(dates, dte[, back_c+1])
+    volume1 <- data.frame(dates, volume[, front_c+1])
+    volume2 <- data.frame(dates, volume[, back_c+1])
+    expiry1 <- data.frame(dates, expiry[, front_c+1])
+    expiry2 <- data.frame(dates, expiry[, back_c+1])
     spreadpoints <- data.frame(dates, price2[,-1] - price1[,-1])
     spreadlogs <- data.frame(dates, log(price2[,-1] / price1[,-1]))
-    spreadreturns <- data.frame(dates,  returns[,front_c+1] - returns[,back_c+1])
+    spreadreturnspoint <- data.frame(dates,  returnpoint1[,-1] - returnpoint2[,-1])
+    spreadreturnslog <- data.frame(dates,  returnlog1[,-1] - returnlog2[,-1])
     colnames(symbol1) <- colnames(symbol2) <- 
-    colnames(price1) <- colnames(price2) <- colnames(return1) <- colnames(return2)  <- 
-      colnames(spreadpoints) <-   colnames(spreadlogs) <- colnames(spreadreturns) <-
-      colnames(dtes)  <- colnames(volumes) <- colnames(ois)<- colnames(expiries) <- c("Date", labels)
+    colnames(price1) <- colnames(price2) <- colnames(returnpoint1) <- colnames(returnpoint2)  <-  colnames(returnlog1) <- colnames(returnlog2)  <- 
+      colnames(spreadpoints) <-   colnames(spreadlogs) <- colnames(spreadreturnspoint) <- colnames(spreadreturnslog) <-
+      colnames(dte1)<- colnames(dte2)  <- colnames(volume1)  <- colnames(volume2) <- colnames(expiry1) <- colnames(expiry2) <- c("Date", labels)
     symbol1_l <- pivot_longer(symbol1, -Date, names_to = "Contracts", values_to = "Symbol1")
     symbol2_l <- pivot_longer(symbol2, -Date, names_to = "Contracts", values_to = "Symbol2")
     price1_l <- pivot_longer(price1, -Date, names_to = "Contracts", values_to = "Price1")
     price2_l <- pivot_longer(price2, -Date, names_to = "Contracts", values_to = "Price2")
-    return1_l <- pivot_longer(return1, -Date, names_to = "Contracts", values_to = "Return1")
-    return2_l <- pivot_longer(return2, -Date, names_to = "Contracts", values_to = "Return2")
+    returnpoint1_l <- pivot_longer(returnpoint1, -Date, names_to = "Contracts", values_to = "ReturnPoint1")
+    returnpoint2_l <- pivot_longer(returnpoint2, -Date, names_to = "Contracts", values_to = "ReturnPoint2")
+    returnlog1_l <- pivot_longer(returnlog1, -Date, names_to = "Contracts", values_to = "ReturnLog1")
+    returnlog2_l <- pivot_longer(returnlog2, -Date, names_to = "Contracts", values_to = "ReturnLog2")
     spreadpoints_l <- pivot_longer(spreadpoints, -Date, names_to = "Contracts", values_to = "SpreadPoint")
     spreadlogs_l <- pivot_longer(spreadlogs, -Date, names_to = "Contracts", values_to = "SpreadLog")
-    spreadreturns_l <- pivot_longer(spreadreturns, -Date, names_to = "Contracts", values_to = "SpreadReturn")
-    dtes_l <- pivot_longer(dtes, -Date, names_to = "Contracts", values_to = "DTE")
-    volumes_l <- pivot_longer(volumes, -Date, names_to = "Contracts", values_to = "Volume")
-    ois_l <- pivot_longer(ois, -Date, names_to = "Contracts", values_to = "OpenInt")
-    expiries_l <- pivot_longer(expiries, -Date, names_to = "Contracts", values_to = "Expiry")
+    spreadreturnspoint_l <- pivot_longer(spreadreturnspoint, -Date, names_to = "Contracts", values_to = "SpreadReturnPoint")
+    spreadreturnslog_l <- pivot_longer(spreadreturnslog, -Date, names_to = "Contracts", values_to = "SpreadReturnLog")
+    dtes1_l <- pivot_longer(dte1, -Date, names_to = "Contracts", values_to = "DTE1")
+    dtes2_l <- pivot_longer(dte2, -Date, names_to = "Contracts", values_to = "DTE2")
+    volumes1_l <- pivot_longer(volume1, -Date, names_to = "Contracts", values_to = "Volume1")
+    volumes2_l <- pivot_longer(volume2, -Date, names_to = "Contracts", values_to = "Volume2")
+    expiries1_l <- pivot_longer(expiry1, -Date, names_to = "Contracts", values_to = "Expiry1")
+    expiries2_l <- pivot_longer(expiry2, -Date, names_to = "Contracts", values_to = "Expiry2")
     spreads <- Reduce(function(...) full_join(..., by = c("Date", "Contracts")), 
-                      list(symbol1_l, symbol2_l, price1_l, price2_l, return1_l, return2_l, 
-                           spreadpoints_l, spreadlogs_l, spreadreturns_l, dtes_l, volumes_l, ois_l, expiries_l)) %>% arrange(Date)
+                      list(symbol1_l, symbol2_l, price1_l, price2_l, returnpoint1_l, returnpoint2_l, returnlog1_l, returnlog2_l, 
+                           spreadpoints_l, spreadlogs_l, spreadreturnspoint_l, spreadreturnslog_l, dtes1_l, dtes2_l, 
+                           volumes1_l, volumes2_l, expiries1_l, expiries2_l)) %>% arrange(Date)
     return(spreads)
 }
   
@@ -357,6 +370,8 @@ runZscore <- function(x, n=10) {
     BackAdj[[symbol]]$Class <- to_load$Class[to_load$Symbol == symbol]
   }
   write_rds(BackAdj, "/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
+  Futures <- read_rds("/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
+  BackAdj <- read_rds("/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
   }
   ## Load cash data
   {
@@ -415,68 +430,85 @@ runZscore <- function(x, n=10) {
       next
     print(paste(symbol, name))
     dir <- paste0("/home/marco/trading/HistoricalData/Barchart/", name)
-    df <- load_future_contracts_long(symbol, dir)
-    Futures_long[[symbol]] <- df
     expiry_df <- load_expiry_file(paste0(dir, "/", "expirations.txt"))
+    df <- load_future_contracts_long(symbol, dir, expiry_df)
+    Futures_long[[symbol]] <- df
     # calculate the contracts combinations to pass to build_spreads
     contracts <- df %>%  group_by(Symbol) %>% arrange(Date) %>% group_by(Date) %>% mutate(Contract = row_number())
     max_level <- min(c(5, max(contracts$Contract)))
     contract_spreads <- cbind(1:(max_level-1), 2:max_level) %>% apply(., 1, c, simplify = F)
-    Spreads[[symbol]] <- build_spreads(df, C = contract_spreads, expiry_df=expiry_df) 
+    Spreads[[symbol]] <- build_spreads(df, C = contract_spreads) 
   }
   write_rds(Futures_long, "/home/marco/trading/HistoricalData/Barchart/Futures_long.RDS")
   write_rds(Spreads, "/home/marco/trading/HistoricalData/Barchart/Spreads.RDS")
   # Plot spreads stuff
+  Futures_long <- read_rds( "/home/marco/trading/HistoricalData/Barchart/Futures_long.RDS")
+  Spreads <- read_rds( "/home/marco/trading/HistoricalData/Barchart/Spreads.RDS")
   for(symbol in names(Spreads)){
     print(symbol)
-    if(symbol != "GR") next
+    #if(symbol != "GR") next
     spreads <- Spreads[[symbol]] 
-    # Calculate vol adj spread returns
-    spreads_returns <- spreads %>% filter(Date > "2000-01-01" &  DTE > 0) %>%  group_by(Contracts) %>% arrange(Date) %>% na.omit %>% filter(n() > 32 ) %>% 
+    # Calculate vol adj spread returns, ignore the last trading day and contracts shorter than the running window
+    spreads_returns <- spreads %>% filter(Date > "2000-01-01" &  DTE1 > 0) %>%  group_by(Contracts) %>% arrange(Date) %>% na.omit %>% filter(n() > 32 ) %>% 
       mutate(
-             SpreadVol = runSD(SpreadReturn, 32),
-             SpreadVol = na.locf(SpreadVol, na.rm=F),
-             scaledreturns = 0.2 / lag(SpreadVol) * SpreadReturn * sqrt(252),
-             scaledreturns = replace(scaledreturns, is.infinite(scaledreturns), 0),
+             SpreadVol = runSD(SpreadReturnLog, 32), SpreadVol = na.locf(SpreadVol, na.rm=F),
+             FrontVol = runSD(ReturnLog1, 32), FrontVol = na.locf(FrontVol, na.rm=F),
+             scaledreturns = 0.2 / lag(SpreadVol) * SpreadReturnLog * sqrt(252),
+             scaledreturns = replace(scaledreturns, is.infinite(scaledreturns) | is.na(scaledreturns), 0),
+             SpreadLogAdj = SpreadLog / SpreadVol
              ) %>%   ungroup %>%    na.omit()
-    # Performance of shorting the front spread by spread level (SpreadLog or SpreadPoint, not the column Level)
-    #res <-  spreads_returns %>%  mutate(SpreadLag = ntile(lag(SpreadLog), 5)) %>%
-    res <-  spreads_returns %>%  mutate(SpreadLag = run_ntile(lag(SpreadLog), 252, 5)) %>%
-      group_by(Contracts, SpreadLag) %>% reframe(M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
-    p <- ggplot(res) + geom_errorbar(aes(x=SpreadLag, ymin=M-S, ymax=M+S), width=0.5) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
-    ggsave(paste(symbol, "_Level.png"), p, width=15, height = 9, dpi=100)
     # Plot the spreads
-    p <- ggplot(spreads_returns, aes(x=Date, y=SpreadLog, color=Contracts)) + geom_line(linewidth=1) + ggtitle(symbol) + scale_color_colorblind()
-    ggsave(paste(symbol, "_Spreads.png"), p, width=15, height = 9, dpi=100)
-    # Performance of shorting the front spread, in log returns
-    res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(cumreturns = cumsum(-SpreadReturn))
-    p <- ggplot(res, aes(x=Date, y=cumreturns, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
-    ggsave(paste(symbol, "_PnL.png"), p, width=15, height = 9, dpi=100)
-    # Performance of shorting the front spread, in vol adjusted returns
-    res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(cumreturns = cumsum(-scaledreturns))
-    #group_by(res, Contracts) %>% reframe(mean(-scaledreturns)/sd(scaledreturns)*16)
-    p <- ggplot(res, aes(x=Date, y=cumreturns, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
-    ggsave(paste(symbol, "_PnLAdj.png"), p, width=15, height = 9, dpi=100)
-    # Performance of shorting the front spread by DTE
-    res <-  spreads_returns %>%  mutate(Decile = round(DTE / 10)) %>% filter(Decile < 10) %>%
-      group_by(Contracts, Decile) %>% reframe(M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
-    p <- ggplot(res) + geom_errorbar(aes(x=Decile, ymin=M-S, ymax=M+S), width=0.5) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
-    ggsave(paste(symbol, "_DTE.png"), p, width=15, height = 9, dpi=100)
-    # Performance of shorting the front spread, conditional on basis slope and momentum
-    res <- spreads_returns %>%  group_by(Contracts) %>%  arrange(Date) %>%  filter(n() > 252) %>% mutate(
-      Slope_Z = (SpreadLog - runMean(SpreadLog, 252))/runSD(SpreadLog, 252),
-      SlopeLag = ntile(lag(Slope_Z), 5)) %>%
-      group_by(Contracts, SlopeLag) %>% reframe(M = mean(scaledreturns), S = sd(scaledreturns)/sqrt(n())*2) %>% na.omit
-    p <- ggplot(res, aes(x=SlopeLag, y=M)) + geom_bar(stat='identity') + geom_errorbar(aes(ymin=M-S,ymax=M+S), width=0.25)+ facet_wrap(~Contracts)
-    ggsave(paste(symbol, "_Slope.png"), p, width=15, height = 9, dpi=100)
-    res_ <- spreads_returns %>%  group_by(Contracts) %>% arrange(Date) %>%  filter(n() > 32+252) %>%  mutate(
-      Momentum = EMA(SpreadReturn, 32), Momentum_Z = runZscore(Momentum, 252), MomentumLag = ntile(lag(Momentum_Z), 5)) %>% na.omit
-    res <- res_ %>% group_by(Contracts, MomentumLag) %>% reframe(M = mean(scaledreturns), S = sd(scaledreturns)/sqrt(n())*2)
-    p <- ggplot(res, aes(x=MomentumLag, y=M)) + geom_bar(stat='identity') + geom_errorbar(aes(ymin=M-S,ymax=M+S), width=0.25)+ facet_wrap(~Contracts)
-    ggsave(paste(symbol, "_Momentum.png"), p, width=15, height = 9, dpi=100)
+    # p <- ggplot(spreads_returns, aes(x=Date, y=SpreadLog, color=Contracts)) + geom_line(linewidth=1) + ggtitle(symbol) + scale_color_colorblind()
+    # ggsave(paste(symbol, "_Spreads.png"), p, width=15, height = 9, dpi=100)
+    # res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(SpreadCumulative = cumsum(SpreadReturn))
+    # p <- ggplot(res, aes(x=Date, y=SpreadCumulative, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
+    # ggsave(paste(symbol, "_SpreadCumulative.png"), p, width=15, height = 9, dpi=100)
+    # # Volatility of the spreads compared to the front outright contract
+    # res <- rbind(spreads_returns %>% mutate(Volatility = runSD(Return1, 32)) %>% select(Volatility) %>% mutate(Contracts=" Front"), 
+    #            spreads_returns  %>% mutate(Volatility=SpreadVol) %>% select(Contracts, Volatility)) %>% mutate(Volatility=Volatility*sqrt(252)) %>% na.omit %>%
+    #   group_by(Contracts) %>% reframe(M=mean(Volatility), S=sd(Volatility)*1) 
+    # p <- ggplot(res, aes(x=Contracts, y=M, ymin=M-S, ymax=M+S)) + geom_pointrange(linewidth=1, size=1)
+    # ggsave(paste(symbol, "_VolSpread.png"), p, width=15, height = 9, dpi=100)
+    ## Performance of trading the front spread by DTE
+    # res <-  spreads_returns %>%  mutate(Decile = round(DTE1 / 10)) %>% filter(Decile < 10) %>%
+    #   group_by(Contracts, Decile) %>% reframe(M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
+    # p <- ggplot(res) + geom_errorbar(aes(x=Decile, ymin=M-S, ymax=M+S), width=0.5) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    # ggsave(paste(symbol, "_DTE.png"), p, width=15, height = 9, dpi=100)
+    ## Performance of trading the front spread, conditional on predictors
+    lagging <- 2
     res_ <- spreads_returns %>%  group_by(Contracts) %>%  arrange(Date) %>%  filter(n() > 252+32) %>% mutate(
+      Level_Z = runZscore(Price1, 252),
+      LevelDecile = ntile(Level_Z, 5),
+      Slope_Z = runZscore(SpreadLog, 252),
+      SlopeDecile = ntile(Slope_Z, 5),
+      Momentum = EMA(SpreadReturnLog, 32),
+      Momentum_Z = runZscore(Momentum, 252), 
+      MomentumDecile = ntile(Momentum_Z, 5),
+      Carry = SpreadLog / (abs(DTE2-DTE1) / 252),
+      CarryDecile = ntile(Carry, 5),
+      ReturnLead = lead(scaledreturns, lagging)
+      ) %>% na.omit
+    res <- res_ %>% group_by(Contracts, LevelDecile) %>% reframe(M=mean(ReturnLead, na.rm=T), S=sd(ReturnLead, na.rm=T)/sqrt(n())*2)
+    p <- ggplot(res) + geom_errorbar(aes(x=LevelDecile, ymin=M-S, ymax=M+S), width=0.25) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    ggsave(paste(symbol, "_Level.png"), p, width=15, height = 9, dpi=100)
+    res <- res_ %>% group_by(Contracts, SlopeDecile) %>% reframe(M = mean(ReturnLead), S = sd(ReturnLead)/sqrt(n())*2) %>% na.omit
+    p <- ggplot(res) + geom_errorbar(aes(x=SlopeDecile, ymin=M-S, ymax=M+S), width=0.25) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    ggsave(paste(symbol, "_Slope.png"), p, width=15, height = 9, dpi=100)
+    res <- res_ %>% group_by(Contracts, MomentumDecile) %>% reframe(M = mean(ReturnLead), S = sd(ReturnLead)/sqrt(n())*2)
+    p <- ggplot(res) + geom_errorbar(aes(x=MomentumDecile, ymin=M-S, ymax=M+S), width=0.25) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    ggsave(paste(symbol, "_Momentum.png"), p, width=15, height = 9, dpi=100)
+    res <- res_ %>% group_by(Contracts, CarryDecile) %>% reframe(M=mean(ReturnLead, na.rm=T), S=sd(ReturnLead, na.rm=T)/sqrt(n())*2)
+    p <- ggplot(res) + geom_errorbar(aes(x=CarryDecile, ymin=M-S, ymax=M+S), width=0.25) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    ggsave(paste(symbol, "_Carry.png"), p, width=15, height = 9, dpi=100)
+    next
+    ## Various pnl plots
+    res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(cumreturns = cumsum(-scaledreturns))
+    p <- ggplot(res, aes(x=Date, y=cumreturns, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
+    ggsave(paste(symbol, "_PnL_VolAdj.png"), p, width=15, height = 9, dpi=100)
+    res_ <- spreads_returns %>%  group_by(Contracts) %>%  arrange(Date) %>%  filter(n() > 252+32) %>% mutate(
+      LevelLag = run_ntile(lag(Price1), 252, 5),
       Slope_Z = runZscore(SpreadLog, 252), SlopeLag = lag(Slope_Z),
-      Momentum = EMA(SpreadReturn, 32), Momentum_Z = runZscore(Momentum, 252), MomentumLag = -lag(Momentum_Z))
+      Momentum = EMA(SpreadReturn, 32), Momentum_Z = runZscore(Momentum, 252), MomentumLag = lag(Momentum_Z))
     res <- mutate(res_, weightedreturns = (scaledreturns * SlopeLag)  %>% replace(., is.na(.), 0), cumreturns = cumsum(weightedreturns))
     p <- ggplot(res, aes(x=Date, y=cumreturns, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind() + ylab("Returns Slope Adjusted")
     ggsave(paste(symbol, "_PnL_SlopeAdj.png"), p, width=15, height = 9, dpi=100)
@@ -489,21 +521,33 @@ runZscore <- function(x, n=10) {
   {
   final_dte <- list()
   final_slope <- list()
+  final_pred <- list()
   for(symbol in names(Spreads)){
     print(symbol)
     spreads <- Spreads[[symbol]] 
-    spreads_returns <- spreads %>% filter(Date > "2000-01-01" &  DTE > 0) %>%  group_by(Contracts) %>% arrange(Date) %>% na.omit %>% filter(n() > 32 ) %>% 
-      mutate(SpreadVol = runSD(SpreadReturn, 32),SpreadVol = na.locf(SpreadVol, na.rm=F), scaledreturns = 0.2 / lag(SpreadVol) * SpreadReturn * sqrt(252), scaledreturns = replace(scaledreturns, is.infinite(scaledreturns), 0),
-      ) %>%   ungroup %>%    na.omit()
+    spreads_returns <- spreads %>% filter(Date > "2000-01-01" &  DTE1 > 0) %>%  group_by(Contracts) %>% arrange(Date) %>% na.omit %>% filter(n() > 32 ) %>% 
+      mutate(SpreadVol = runSD(SpreadReturnLog, 32),SpreadVol = na.locf(SpreadVol, na.rm=F), scaledreturns = 0.2 / lag(SpreadVol) * SpreadReturnLog * sqrt(252), scaledreturns = replace(scaledreturns, is.infinite(scaledreturns), 0),
+      ) %>% filter(abs(scaledreturns) < sd(scaledreturns, na.rm=T)*2) %>%   ungroup %>%    na.omit()
     infos <- to_load[to_load$Symbol==symbol,][,2:3] %>% unlist
-    res <-  spreads_returns %>%  mutate(Decile = round(DTE / 10),
-                                                    Slope_Z = runZscore(SpreadLog, 252), SlopeLag = ntile(lag(Slope_Z), 5))  %>% na.omit
-    final_dte[[symbol]] <- res %>% filter(Decile < 5) %>% group_by(Contracts, Decile) %>% reframe(Symbol=symbol, Name=infos[1], Class=infos[2], M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
-    final_slope[[symbol]] <- group_by(res, Contracts) %>%  reframe(Symbol=symbol, Name=infos[1], Class=infos[2], M=mean(scaledreturns*SlopeLag, na.rm=T), S=sd(scaledreturns*SlopeLag, na.rm=T)/sqrt(n())*2)
+    lagging <- 2
+    res_ <- spreads_returns %>%  group_by(Contracts) %>%  arrange(Date) %>%  filter(n() > 252+32) %>% mutate(
+      Level_Z = runZscore(Price1, 252),
+      LevelDecile = ntile(Level_Z, 5),
+      Slope_Z = runZscore(SpreadLog, 252),
+      SlopeDecile = ntile(Slope_Z, 5),
+      Momentum = EMA(SpreadReturnLog, 32),
+      Momentum_Z = runZscore(Momentum, 252), 
+      MomentumDecile = ntile(Momentum_Z, 5),
+      Carry = SpreadLog / (abs(DTE2-DTE1) / 252),
+      CarryDecile = ntile(Carry, 5),
+      ReturnLead = lead(scaledreturns, lagging)
+    ) %>% na.omit
+    final_pred[[symbol]] <- res_
+    final_slope[[symbol]] <- group_by(res_, Contracts) %>%  reframe(Symbol=symbol, Name=infos[1], Class=infos[2], M=mean(scaledreturns*SlopeLag, na.rm=T), S=sd(scaledreturns*SlopeLag, na.rm=T)/sqrt(n())*2)
   }
   # Check front contracts spread adjusted returns and plot by class
-  ret <- do.call(rbind, final_dte) %>% filter(Contracts == "c_12", Decile == 0) 
-  ggplot(ret, aes(Class, M, ymin=M-S, ymax=M+S, color=Class)) + geom_pointrange(position=position_jitter(width=0.45)) +  geom_hline(yintercept = 0) + scale_color_colorblind() + ylim(c(-5,5))  
+  ret <- do.call(rbind, final_slope) %>% filter(Contracts == "c_23") 
+  ggplot(ret, aes(Class, M, ymin=M-S, ymax=M+S, color=Class)) + geom_pointrange(position=position_jitter(width=0.45)) +  geom_hline(yintercept = 0) + scale_color_colorblind()   
   }
   ## Run a simple daily strategy based on basis
   {
@@ -613,19 +657,11 @@ runZscore <- function(x, n=10) {
     df <- Futures[[symbol]] %>% filter(year(Date) > 2000)
     res <- pivot_longer(df, -Date, names_to = "Symbol", values_to = "Close") %>% na.omit %>% 
       group_by(Date) %>% mutate(Contract=row_number()) %>% group_by(Symbol) %>% 
-      mutate(Return = log(Close / lag(Close)), N = n()) %>% filter(N>20) %>% na.omit %>% mutate(Volatility=runSD(Return, 20)*sqrt(252)) %>% 
-      group_by(Date) %>% mutate(SpreadReturn = log(Close / lag(Close)), Spread = paste(lag(Contract), Contract, sep=" "))   %>% 
-      na.omit %>% group_by(Spread) %>% mutate(M=n()) %>% filter(M>20) %>%  
-      mutate(SpreadVolatility=runSD(SpreadReturn, 20)*sqrt(252)) 
+      mutate(Return = log(Close / lag(Close)), N = n()) %>% filter(N>32) %>% na.omit %>% mutate(Volatility=runSD(Return, 32)*sqrt(252)) 
     res %>% 
       group_by(Contract) %>% reframe(M = median(Volatility, na.rm=T), S = sd(Volatility, na.rm=T)/sqrt(n())*2) %>% 
        ggplot(aes(Contract, ymin=M-S, ymax=M+S)) + geom_errorbar(width=0.5) + xlab("Contract") + ggtitle("Volatility")  -> p
     ggsave(filename = paste0(symbol, "_contract.png"), p,  height = 9, width = 12,dpi=150)
-    
-    res  %>% 
-      group_by(Spread) %>% reframe(M = median(SpreadVolatility, na.rm=T), S = sd(SpreadVolatility, na.rm=T)/sqrt(n())*2) %>% separate(Spread, into = c("Spread1", "Spread2"), sep = " ") %>% mutate(Spread1=as.numeric(Spread1)) %>% arrange(Spread1) %>% 
-      ggplot(aes(Spread1, ymin=M-S, ymax=M+S)) + geom_errorbar(width=0.5) + xlab("Spread") + ggtitle("Volatility")  -> p
-    ggsave(filename = paste0(symbol, "_spread.png"), p,  height = 9, width = 12,dpi=150)
   }
   }
   ## Convergence to barchart cash
@@ -801,91 +837,4 @@ runZscore <- function(x, n=10) {
   fig1
   }
 }
-
-# Volatiliy spread
-{
-vol <- merge(BackAdj$VI, BackAdj$DV, by="Date")
-vol$Close <- (vol$Close.x - vol$Close.y*42 )%>% na.locf(na.rm=F)
-vol$Return <- vol$Return.x - vol$Return.y
-vol$Volatility <- calculate_volatility(vol$Return)
-vol$Position <- 0.4 / vol$Volatility
-cost <- 0.008
-d <- BBands(vol$Close , 32, maType = SMA)
-vol$Trade <- 0
-vol$Cost <- 0
-for(i in 2:nrow(vol)) {
-  vol$Trade[i] <- vol$Trade[i-1]
-  if(d[i,2] %>% is.na) next;
-  if(vol$Trade[i] == 0) {
-    if(vol$Close[i] < d[i,1]) {
-      vol$Trade[i] <- 1; 
-      vol$Cost[i] <- cost 
-    }
-    if(vol$Close[i] > d[i,3]) {
-      vol$Trade[i] <- -1; 
-      vol$Cost[i] <- cost
-    }
-  } else {
-    if(vol$Trade[i] == 1 & vol$Close[i] > d[i,2]) 
-      vol$Trade[i] <- 0; 
-    if(vol$Trade[i] == -1 & vol$Close[i] < d[i,2]) 
-      vol$Trade[i] <- 0;
-  }
-}
-vol$Trade <- lag(vol$Trade)
-vol$Cost <- lag(vol$Cost)
-i <- 250
-f <- tail(vol, i)
-plot(f$Close, col=f$Trade+2, pch=16, cex=2 )
-lines(f$Close, col="gray")
-matplot2(d[,1:3] %>% tail(i), add=T)
-vol$Excess <- vol$Return * vol$Trade * vol$Position - vol$Cost
-vol$Excess[is.na(vol$Excess)] <- 0
-cumsum(vol$Excess %>% na.omit) %>% plot
-strategy_performance(vol$Excess, vol$Date) %>% unlist
-}
-
-# ES/YM spread
-{
-  vol <- merge(BackAdj$ES, BackAdj$YM, by="Date")
-  vol$Close <- (vol$Close.x - vol$Close.y )%>% na.locf(na.rm=F)
-  vol$Return <- vol$Return.x - vol$Return.y
-  vol$Volatility <- calculate_volatility(vol$Return)
-  vol$Position <- 0.4 / vol$Volatility
-  cost <- 0.00
-  d <- BBands(vol$Close, 32, maType = SMA, sd = 2)
-  vol$Trade <- 0
-  vol$Cost <- 0
-  for(i in 2:nrow(vol)) {
-    vol$Trade[i] <- vol$Trade[i-1]
-    if(d[i,2] %>% is.na) next;
-    if(vol$Trade[i] == 0) {
-      if(vol$Close[i] < d[i,1]) {
-        vol$Trade[i] <- 1; 
-        vol$Cost[i] <- cost 
-      }
-      if(vol$Close[i] > d[i,3]) {
-        vol$Trade[i] <- -1; 
-        vol$Cost[i] <- cost
-      }
-    } else {
-      if(vol$Trade[i] == 1 & vol$Close[i] > d[i,2]) 
-        vol$Trade[i] <- 0; 
-      if(vol$Trade[i] == -1 & vol$Close[i] < d[i,2]) 
-        vol$Trade[i] <- 0;
-    }
-  }
-  vol$Trade <- lag(vol$Trade)
-  vol$Cost <- lag(vol$Cost)
-  i <- 250
-  f <- tail(vol, i)
-  plot(f$Close, col=f$Trade+2, pch=16, cex=2 )
-  lines(f$Close, col="gray")
-  matplot2(d[,1:3] %>% tail(i), add=T)
-  vol$Excess <- vol$Return * vol$Trade * vol$Position - vol$Cost
-  vol$Excess[is.na(vol$Excess)] <- 0
-  cumsum(vol$Excess %>% na.omit) %>% plot
-  strategy_performance(vol$Excess, vol$Date) %>% unlist
-}
-
 

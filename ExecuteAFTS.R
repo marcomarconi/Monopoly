@@ -169,15 +169,16 @@
   logs_dir <- paste0(main_dir, "Logs/")
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
-  target_vol <- 0.4
-  IDM = 2.5  
+  target_vol <- 0.5
+  IDM = 2.8  
   FDMtrend <- 1.2 # from ATFS book
   FDMcarry <- 2.5 # relaculated using CMC data (2.85, and rounded to 2.5)
   FDMskew <- 1.2 # relaculated using CMC data and the skew rules in the functions declared above
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
-  corr_length <- 25
+  corr_length <- 25 # weekly correlation window
   position_buffering_level <- 2.5 # in backtest daily SD is ~1
+  short_penality <- 0.75 # Penalize short positions (NULL to disable)
   use_dynamic_portfolio <- FALSE
   portfolio_buffering_level <- 0.1
   trade_shadow_cost <- 0
@@ -199,7 +200,7 @@ dry_run <- opt$dryrun
 
 {
   print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "FDM:", FDM,
-               "Position Buffering Level:", position_buffering_level))
+               "Position Buffering Level:", position_buffering_level, "Short Penalty:", short_penality))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
@@ -272,7 +273,7 @@ dry_run <- opt$dryrun
   closes <- lapply(instruments_data, function(x)x[[1]] %>% select(Date, Close))
   closes_merged <- Reduce(function(...) full_join(..., by="Date"), closes) %>% arrange(Date) %>% na.locf(na.rm=F)
   colnames(closes_merged) <- c("Date", names(instruments_data))
-  daily_returns <- data.frame(Date=as.Date(closes_merged$Date), apply(closes_merged[,-1], 2, function(x) c(0, diff(log(x)))))
+  daily_returns <- data.frame(Date=as.Date(closes_merged$Date), apply(closes_merged[,-1], 2, function(x) c(NA, diff(log(x)))))
   daily_returns <- na.omit(daily_returns) # Potentially dangerous?
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
@@ -283,8 +284,8 @@ dry_run <- opt$dryrun
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <-  names(instruments_data)
   if(!dry_run) {
-    png(paste0(plots_dir, "/", today_string, "_Cor_matrix.png"), width = 800, height = 600)
-    heatmap(abs(cor_matrix[tradable_symbols,tradable_symbols]), Rowv = NA, Colv = NA, cexCol = 2, cexRow = 2)
+    png(paste0(plots_dir, "/", today_string, "_Cor_matrix.png"), width = 800, height = 800)
+    corrplot::corrplot(cor_matrix[tradable_symbols,tradable_symbols], method = "number")
     dev.off()
   }
   
@@ -363,6 +364,11 @@ dry_run <- opt$dryrun
     df$Forecast <- cap_forecast(df$Forecast)
     df$InstCapital <- capital * df$Weight * IDM 
     df$Exposure <- df$InstCapital * target_vol/df$Volatility 
+    # Penalize short positions
+    if(!is.null(short_penality)) {
+      df$Exposure <- ifelse(df$Forecast < 0, df$Exposure*short_penality, df$Exposure)
+      df$Exposure <- ifelse(df$Forecast > 0, df$Exposure*(1+(1-short_penality)), df$Exposure)
+    }
     df$PositionOptimal <-  (df$Exposure * df$FX * df$Forecast/10) /
       (df$ContractSize * df$Close) 
     df$PositionMax <- (df$Exposure * df$FX * 20/10) /
@@ -435,6 +441,10 @@ dry_run <- opt$dryrun
   portfolio_positions <- sum(today_trading$Position != 0)
   portfolio_symbols <- nrow(today_trading)
   print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
+  # The empirical current IDM using daily data
+  current_idm <- round(calculate_IDM(tail(daily_returns[,-1], corr_length*5)), 2)
+  print(paste("Empirical daily IDM:", current_idm))
+  # Update position
   print("Positions to update:")
   trades <- today_trading %>% filter(Trading == TRUE) %>% 
     dplyr::select(Date, Close, Symbol, PositionChange, Position, PositionPrevious, PositionMax, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
@@ -446,7 +456,7 @@ dry_run <- opt$dryrun
     portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE) %>% as.data.frame()
     info <- tibble(Date=today_string, Symbols=portfolio_symbols, 
                        Positions=portfolio_positions, Tracking_Error=NA, Volatility=portfolio_volatility, 
-                       Jump_Risk=NA, Correlation_Risk=portfolio_correlation_risk)
+                       Jump_Risk=NA, Correlation_Risk=portfolio_correlation_risk, IDM=current_idm)
     write_csv(rbind(info, portfolio_info), portfolio_file)
   }
 }

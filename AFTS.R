@@ -914,9 +914,9 @@ print(res$Aggregate %>% unlist)
     CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
                        "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
                        "ES","ZW","HS","NY","LX", "BT")
-    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","HS","ES","BT")
-    Assets_all <- BackAdj[CMC_selection_]
-    Assets <- BackAdj[CMC_selection]
+    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","LS","NG","OJ","ZR","ZS","SW","ZW","ZS","HS","ES","BT")
+    Assets_all <- BackAdj
+    Assets <- BackAdj
     results <- list();  forecasts <- list();  exposures <- list();returns <- list(); vols <- list();strategies <- list()
     target_vol <- 0.25
     IDM = 2.5
@@ -924,14 +924,18 @@ print(res$Aggregate %>% unlist)
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1. # 1.5
-    starting_year <- 2000
+    FDM <- 1.5 # 1.5
+    starting_year <- 1980
+    directional_only <- 0 # 0: bidirectional, -1: short only, 1: long only
+    # Penalize short positions (NULL to disable)
+    short_penality <- NULL
     # Apply relative volatility
     relative_vol <- FALSE
     # Symbol-wise results
     symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=1, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
+    #weights <- list("Long"=1, "Trend"=0, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
     # Asset class indices
@@ -982,7 +986,7 @@ print(res$Aggregate %>% unlist)
       if(weights[["Trend"]]  > 0) {
         df$ForecastEMA <- multiple_EMA(df$AdjClose, df$Close, df$Volatility) 
         df$ForecastDC <- multiple_DC(df$AdjClose, df$Close, df$Volatility) 
-        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC), na.rm = T) * FDMtrend * df$M * df$Cor
+        df$ForecastTrend <- rowMeans(cbind(df$ForecastEMA, df$ForecastDC), na.rm = T) * FDMtrend * df$M 
         df$ForecastTrend <- cap_forecast(df$ForecastTrend) 
       }
       # Carry (strategy 10)
@@ -1050,6 +1054,16 @@ print(res$Aggregate %>% unlist)
                        weights[["Skew"]] * df$ForecastSkew + 
                        weights[["Test"]] * df$ForecastTest) 
       df$Forecast <- cap_forecast(df$Forecast * FDM)
+      # Directional filter
+      if(directional_only == 1) 
+        df$Forecast <- ifelse(df$Forecast < 0, 0, df$Forecast)
+      else if(directional_only == -1) 
+        df$Forecast <- ifelse(df$Forecast > 0, 0, df$Forecast)
+      # Penalize short positions
+      if(!is.null(short_penality)) {
+        df$Position <- ifelse(df$Forecast < 0, df$Position*short_penality, df$Position)
+        df$Position <- ifelse(df$Forecast > 0, df$Position*(1+(1-short_penality)), df$Position)
+      }
       df$Excess <- lag(df$Position * df$Forecast/10) * df$Return * IDM 
       df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 
@@ -1072,7 +1086,7 @@ print(res$Aggregate %>% unlist)
     print(paste("Average Trade Turnover:", avg_trade_turnover))
     if(symbol_wise) {
       res$Symbols$Class <- lapply(Assets[names(results)], function(x) x$Class[1]) %>% unlist
-      group_by(res$Symbols, Class) %>% summarise(SR_mean=mean(`Sharpe ratio`, na.rm=T), SR_sd=sd(`Sharpe ratio`, na.rm=T))
+      group_by(res$Symbols, Class) %>% summarise(SR_mean=mean(`Sharpe ratio`, na.rm=T), SR_sd=sd(`Sharpe ratio`, na.rm=T)/sqrt(n())*2)
     }
     {
     ## Some figures takes from the Risk Management section
