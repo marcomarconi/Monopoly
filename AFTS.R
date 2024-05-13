@@ -934,7 +934,7 @@ print(res$Aggregate %>% unlist)
     # Symbol-wise results
     symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=1, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=1, "CSM"=0,"Test"=0)
     #weights <- list("Long"=1, "Trend"=0, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")

@@ -11,6 +11,7 @@
   suppressMessages(library(data.table))
   suppressMessages(library(Rfast))
   suppressMessages(library(optparse))
+  suppressMessages(library(crayon))
   source("/home/marco/trading/Systems/Common/RiskManagement.R")
   
 }
@@ -79,8 +80,10 @@
     df <- na.omit(df) %>% dplyr::select(Date, Close, Period)
     if((length(unique(df$Date)) != length(df$Date)))
       stop(paste("Duplicate dates in ", symbol))
-    if(tail(df$Date, 1) != today())
+    if(tail(df$Date, 1) != today()) {
+      cat(red("\nLast date does not correspond to today in ", symbol,"\n"))
       warning(paste("Last date does not correspond to today in ", symbol))
+    }
     df$Close <- as.numeric(df$Close) # sometimes it is loaded as character
     return(df)
   }
@@ -90,7 +93,8 @@
     l <- tail(sort(list.files(symbol_dir, pattern = "holding_cost")), 1)
     f <- read_csv(paste0(symbol_dir, "/", l), show_col_types = FALSE, col_names = FALSE)
     if(dim(f)[1] == 0) {
-      stop(paste("Holding cost file empty for symbol:", symbol))
+      cat(red("\nHolding cost file empty for symbol:", symbol,"\n"))
+      warning(paste("Holding cost file empty for symbol:", symbol))
       hc <- c(0,0)        
     } else {
       hc <- unlist(f[,-1])
@@ -170,37 +174,42 @@
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.5
-  IDM = 2.8  
+  IDM <- 2.3 
   FDMtrend <- 1.2 # from ATFS book
   FDMcarry <- 2.5 # relaculated using CMC data (2.85, and rounded to 2.5)
   FDMskew <- 1.2 # relaculated using CMC data and the skew rules in the functions declared above
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
-  position_buffering_level <- 2.5 # in backtest daily SD is ~1
+  position_buffering_level <- 2.0 # in backtest daily SD is ~1
   short_penality <- 0.75 # Penalize short positions (NULL to disable)
   use_dynamic_portfolio <- FALSE
   portfolio_buffering_level <- 0.1
   trade_shadow_cost <- 0
   dry_run <- FALSE
+  skip_download <- FALSE
 }
 
 
 # Read command arguments
 option_list = list(
     make_option(c("-c", "--capital"),  type="double", help="Account Capital."),
-    make_option(c("-d", "--dryrun"), action="store_true", default=FALSE, help="Do not write any file.")
+    make_option(c("-d", "--dryrun"), action="store_true", default=FALSE, help="Do not write any file."),
+    make_option(c("-s", "--skipdownload"), action="store_true", default=FALSE, help="Do not download data.")
 );
 opt_parser = OptionParser(option_list=option_list);
 opt = parse_args(opt_parser);
 capital <- opt$capital
 dry_run <- opt$dryrun
+skip_download <- opt$skipdownload
 
 
 
 {
   print(paste("Capital:", capital, "Target Volatility:", target_vol, "IDM:", IDM, "FDM:", FDM,
-               "Position Buffering Level:", position_buffering_level, "Short Penalty:", short_penality))
+               "Position Buffering Level:", position_buffering_level, "Short Penalty:", short_penality,
+               "Dry Run:", dry_run, "Skip Downloading Data:", skip_download
+              ))
   # create dirs&files
   today_string <- gsub("-", "", today())
   now_string <- gsub("-| |:", "", now())
@@ -212,6 +221,8 @@ dry_run <- opt$dryrun
     if(!dir.exists(FX_dir))
       dir.create(FX_dir)
   }
+  
+  setwd(main_dir)
   
   # load instruments infos and calculate instruments weights from asset classes groups 
   print("Loading symbols info and previous positions file...")
@@ -231,13 +242,13 @@ dry_run <- opt$dryrun
   previous_trading <- read_csv(positions_file, col_names = TRUE, show_col_types = FALSE) %>% arrange(Symbol)
 
   # scrape price and FX data
-  print("Scraping price and FX data...")
-  setwd(main_dir)
-  if(!dry_run)
+  if(!skip_download){
+    print("Scraping price and FX data...")
     system(paste("bash", scrape_script, scrape_dir, instrument_file, FX_dir, FX_file))
+  }
 
   # load price data from previous scrape, we merge it we the current data. 
-  # Important: we expect the current dir contains already some data (with Date and Close columns), download it manually the very first time.
+  # IMPORTANT: we expect the current dir contains already some data (with Date and Close columns), download it manually the very first time.
   print("Loading price data...")
   instruments_data <- list()
   for(symbol in instruments_info$Symbol) {
@@ -277,7 +288,7 @@ dry_run <- opt$dryrun
   daily_returns <- na.omit(daily_returns) # Potentially dangerous?
   weekly_returns <- mutate(daily_returns, Date=yearweek(Date)) %>% group_by(Date) %>% summarise(across(everything(), ~mean(.x,na.rm=TRUE)))
   vols <- data.frame(Date=daily_returns$Date, apply(daily_returns[,-1], 2, function(x) calculate_volatility(x))) 
-  #cor_matrix <- cor(tail(weekly_returns[,-1], corr_length), use="pairwise.complete.obs") # static last corr matrix
+  #cor_matrix <- cor(tail(daily_returns[,-1], corr_length), use="pairwise.complete.obs") # static last corr matrix
   Q <- runCorMatrix(as.matrix(weekly_returns[,-1]), n = corr_length) # running corr matrix (note: if we use absolute correlation we get an error in the dynamic portfolio)
   cor_matrix <- Q[[length(Q)]] 
   last_day_vol <- tail(vols, 1)[-1]
@@ -337,6 +348,13 @@ dry_run <- opt$dryrun
     # bonds are not negatively affected in this analysis. Of course low volatility assets must be played on the future contract
     # if you want to obtain the carry, as interest rates of the cash are always negative (because of the 3% commission that
     # is higher than the volatility itself). For high volatility assets you can choose between cash or future.
+    if(hc[1] == 0 | hc[2] == 0) {
+      prev_hc_long <- previous_trading %>% filter(Symbol == symbol) %>% pull(HoldingCostLong)
+      prev_hc_short <- previous_trading %>% filter(Symbol == symbol) %>% pull(HoldingCostShort)
+      hc[1] <- prev_hc_long
+      hc[2] <- prev_hc_short
+      warning(paste("WARNING: Holding costs for symbol", symbol, "are zero. Using previous costs:", prev_hc_long, prev_hc_short))
+    }
     hc_max <- which.max(hc)
     hc_commission <- case_when(
                               df$Product[1] == "Cash" ~ 0,
@@ -386,6 +404,10 @@ dry_run <- opt$dryrun
   # Final table
   today_trading <- do.call(rbind, last_day)
   if(!all(previous_trading$Symbol %in% today_trading$Symbol)) {
+    missing_prev <- previous_trading$Symbol[!(previous_trading$Symbol %in% today_trading$Symbol)]
+    missing_today <- today_trading$Symbol[!(today_trading$Symbol %in% previous_trading$Symbol)]
+    stop(paste("Previous position symbols (POSITION file) and current symbols (INSTRUMENTS file) do not match. Missing in current: ", missing_prev, ", missing in previous: ", missing_today, "\nFix it manually."))
+  } else if (!all(today_trading$Symbol %in% previous_trading$Symbol)) {
     missing_prev <- previous_trading$Symbol[!(previous_trading$Symbol %in% today_trading$Symbol)]
     missing_today <- today_trading$Symbol[!(today_trading$Symbol %in% previous_trading$Symbol)]
     stop(paste("Previous position symbols (POSITION file) and current symbols (INSTRUMENTS file) do not match. Missing in current: ", missing_prev, ", missing in previous: ", missing_today, "\nFix it manually."))
@@ -442,7 +464,7 @@ dry_run <- opt$dryrun
   portfolio_symbols <- nrow(today_trading)
   print(paste("Active positions:", portfolio_positions, "total symbols:", portfolio_symbols))
   # The empirical current IDM using daily data
-  current_idm <- round(calculate_IDM(tail(daily_returns[,-1], corr_length*5)), 2)
+  current_idm <- round(calculate_IDM(tail(daily_returns[,-1], corr_length)), 2)
   print(paste("Empirical daily IDM:", current_idm))
   # Update position
   print("Positions to update:")
@@ -454,7 +476,7 @@ dry_run <- opt$dryrun
     write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))
     write_csv(today_trading, "POSITIONS.csv")
     portfolio_info <- read_csv(portfolio_file, show_col_types  = FALSE) %>% as.data.frame()
-    info <- tibble(Date=today_string, Symbols=portfolio_symbols, 
+    info <- tibble(Date=today_string, Capital=capital, Symbols=portfolio_symbols, 
                        Positions=portfolio_positions, Tracking_Error=NA, Volatility=portfolio_volatility, 
                        Jump_Risk=NA, Correlation_Risk=portfolio_correlation_risk, IDM=current_idm)
     write_csv(rbind(info, portfolio_info), portfolio_file)
