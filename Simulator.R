@@ -119,3 +119,10 @@ plot.ts(cumsum(x))
 # }
 # trading_days <- data.frame(Date=date_range, trading_days)
 
+{
+VIX <- read_csv("/home/marco/trading/Systems/Options/Data//VIX.csv", show_col_types = F)  %>% select(Date, `Adj Close`) %>% rename(VIX=`Adj Close`)
+df <- BackAdj$VI 
+VI <- merge(df, VIX, by="Date") %>% mutate(VIX = (VIX), VX=(Close), Index = rep(1:nrow(VI), each=21, length.out=nrow(VI)))
+b <- VI %>% group_by(Index) %>% reframe(VIX=first(VIX), VX=first(VX), PnL=sum(Difference)*-1000) %>% mutate(x=VIX, y=PnL)
+plot(b$x, b$PnL)
+}

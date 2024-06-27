@@ -7,6 +7,7 @@ fx_file=$4
 
 today=`date +"%Y%m%d"`
 today_dash=`date +"%Y-%m-%d"`
+cmc_website="https://www.cmcmarkets.com/en-gb/instruments/" # you might want to interchange en-gb with en when either one is not working
 
 ### Download cash contracts from UK CMC markets
 # iterate over the instruments file, in the csv format (without quotes)  "symbol url", "two letter code", "buy holding cost", "sell holding cost", "class". Here we only need the first three
@@ -19,7 +20,7 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6; do
   f=$w1
   # we scrape the main symbol page, where we can fine the apicode and the apikey
   scrape=_scrape.$f.html
-  wget -q "https://www.cmcmarkets.com/en/instruments/"$f -O $scrape;
+  wget -q $cmc_website$f -O $scrape;
   apicode=`grep api_code $scrape | sed -e 's/<input type="hidden" id="api_code" value="//' -e 's/"\/>//'`
   apikey=`grep api_key $scrape | sed -e 's/<input type="hidden" id="api_key" value="//' -e 's/">//'`
   # download the correspong "hidden" data

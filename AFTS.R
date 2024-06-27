@@ -17,8 +17,8 @@
 }
 
 
-Futures <- read_rds("/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
-BackAdj <- read_rds("/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
+Futures <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/Futures.RDS")
+BackAdj <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/BackAdj.RDS")
 
 # All book's strategies
 {

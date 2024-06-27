@@ -115,7 +115,7 @@
   # }
   
   
-  multiple_EMA <- function(adjclose, close, volatility, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
+  multiple_EMA <- function(adjclose, close, volatility, spans=c(2, 4, 8, 16, 32, 64), scalars=c(12.1, 8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
     n <- length(spans)
     EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
     EWMACs <- lapply(1:n, function(i) EWMACs[[i]] / (close * volatility / sqrt(period)) * scalars[i] )
@@ -123,7 +123,7 @@
     forecast <- rowMeans(do.call(cbind, EWMACs))
     return(forecast)
   }
-  multiple_DC <- function(adjclose, close, volatility, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
+  multiple_DC <- function(adjclose, close, volatility, spans=c(10, 20, 40, 80, 160, 320), scalars=c(0.60, 0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
     DCs <- lapply(1:n, function(i) EMA(na.locf(DCs[[i]], na.rm=F) * 40, spans[i]/4) * scalars[i] )
@@ -133,7 +133,7 @@
   }
   
   # basis and volatility are in percentage
-  multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(21, 63, 126), scalar=30, expiry_span=12, cap=20) {
+  multiple_Carry <- function(basis, expiry_difference, volatility, spans=c(5, 20, 60, 120), scalar=30, expiry_span=12, cap=20) {
     n <- length(spans)
     Carry <- (basis / (expiry_difference / expiry_span)) / ( volatility )
     Carry <- na.locf(Carry, na.rm=FALSE); Carry[is.na(Carry)] <- 0
@@ -175,13 +175,13 @@
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.5
   IDM <- 2.3 
-  FDMtrend <- 1.2 # from ATFS book
+  FDMtrend <- 1.5 # 
   FDMcarry <- 2.5 # relaculated using CMC data (2.85, and rounded to 2.5)
   FDMskew <- 1.2 # relaculated using CMC data and the skew rules in the functions declared above
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
-  position_buffering_level <- 2.0 # in backtest daily SD is ~1
+  position_buffering_level <- 2.5 # in backtest daily SD is ~1
   short_penality <- 0.75 # Penalize short positions (NULL to disable)
   use_dynamic_portfolio <- FALSE
   portfolio_buffering_level <- 0.1

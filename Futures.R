@@ -738,6 +738,9 @@ runZscore <- function(x, n=10) {
     df <- BackAdj[[symbol]] %>% filter(year(Date) > 2000)
     df$Volatility <- calculate_volatility(df$Return)
     df$Return <- df$Return / df$Volatility * sqrt(252) # Seasonality adjusted, comment it if unwanted
+    a <- mutate(df, dom = mday(Date)) %>% mutate(W = case_when(dom <= 5 ~ "BOM", dom >= 27 ~ "EOM", TRUE ~ NA)) %>% group_by(W) %>% summarise(Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n())) %>% na.omit
+    p <- ggplot(a) + geom_bar(aes(W, Mean), stat="identity") + geom_errorbar(aes(x=W, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    ggsave(filename = paste0(symbol, "_TOM.png"), p, width=12, height=9,dpi=150)
     a <- group_by(df, week(Date)) %>% summarise(Week=first(week(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
     p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_yearly.png"), p, width=12, height=9,dpi=150)
