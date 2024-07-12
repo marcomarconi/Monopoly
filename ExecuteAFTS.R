@@ -173,11 +173,11 @@
   logs_dir <- paste0(main_dir, "Logs/")
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
-  target_vol <- 0.5
-  IDM <- 2.3 
-  FDMtrend <- 1.5 # 
-  FDMcarry <- 2.5 # relaculated using CMC data (2.85, and rounded to 2.5)
-  FDMskew <- 1.2 # relaculated using CMC data and the skew rules in the functions declared above
+  target_vol <- 0.275
+  IDM <- 2.5
+  FDMtrend <- 1.75 # 
+  FDMcarry <- 2.5 # 
+  FDMskew <- 1.2 # 
   FDM <- 1.5
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
@@ -295,7 +295,10 @@ skip_download <- opt$skipdownload
   cov_matrix <- diag(last_day_vol) %*% cor_matrix %*% diag(last_day_vol)
   rownames(cov_matrix) <- colnames(cov_matrix) <-  names(instruments_data)
   if(!dry_run) {
-    png(paste0(plots_dir, "/", today_string, "_Cor_matrix.png"), width = 800, height = 800)
+    png(paste0(plots_dir, "/", today_string, "_Cor_matrix_all.png"), width = 1200, height = 1200)
+    corrplot::corrplot(cor_matrix, method = "number")
+    dev.off()
+    png(paste0(plots_dir, "/", today_string, "_Cor_matrix_trading.png"), width = 1200, height = 1200)
     corrplot::corrplot(cor_matrix[tradable_symbols,tradable_symbols], method = "number")
     dev.off()
   }
@@ -356,10 +359,12 @@ skip_download <- opt$skipdownload
       warning(paste("WARNING: Holding costs for symbol", symbol, "are zero. Using previous costs:", prev_hc_long, prev_hc_short))
     }
     hc_max <- which.max(hc)
+    # We have to adjust the swap rate to guess the actual carry for futures (CMC add a 3% commission on future swap rates)
     hc_commission <- case_when(
                               df$Product[1] == "Cash" ~ 0,
                               df$Product[1] == "Index" ~ 0.03,
                               df$Product[1] == "Future" ~ 0.03,
+                              df$Product[1] == "FX" ~ 0,
                               TRUE ~ NA_real_)
     hc_value <- (hc[hc_max]+hc_commission)
     # When carry is always against us (both long and short charge us), we assume it is zero
@@ -471,6 +476,8 @@ skip_download <- opt$skipdownload
   trades <- today_trading %>% filter(Trading == TRUE) %>% 
     dplyr::select(Date, Close, Symbol, PositionChange, Position, PositionPrevious, PositionMax, PositionOptimal, Forecast, ForecastTrend, ForecastCarry, ForecastSkew)
   print(as.data.frame(trades))
+  print("Forecast averages:")
+  print(today_trading %>% dplyr::select(Forecast, ForecastTrend, ForecastCarry, ForecastSkew) %>% abs %>% colMeans())
   # Write to file
   if(!dry_run) {
     write_csv(previous_trading, paste0(logs_dir, "/", now_string, ".POSITIONS.csv"))

@@ -344,7 +344,7 @@ runZscore <- function(x, n=10) {
   stop("Do not execute.")
   ## Load futures contracts and backadjust them
   {
-  setwd( "/home/marco/trading/HistoricalData/Barchart/")
+  setwd( "/home/marco/trading/HistoricalData/Barchart/Futures/")
   to_load <- read_csv("Instrument_List.csv")
   # load the full futures contracts
   Futures <- list()
