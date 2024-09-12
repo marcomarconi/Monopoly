@@ -783,7 +783,7 @@ print(res$Aggregate %>% unlist)
   cap_forecast <- function(x, cap=20) {
     return(ifelse(x > cap, cap, ifelse(x < -cap, -cap, x ) ))
   }
-  multiple_EMA <- function(adjclose, close, risk, spans=c(4, 8, 16, 32, 64), scalars=c(8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
+  multiple_EMA <- function(adjclose, close, risk, spans=c(2, 4, 8, 16, 32, 64), scalars=c(12.1, 8.53, 5.95, 4.1, 2.79, 1.91), mult=4, cap=20, period=252) {
     n <- length(spans)
     EWMACs <- lapply(1:n, function(i) EMA(adjclose, spans[i]) -  EMA(adjclose, spans[i]*mult))
     EWMACs <- lapply(1:n, function(i) EWMACs[[i]] / (close * risk / sqrt(period)) * scalars[i] )
@@ -799,7 +799,7 @@ print(res$Aggregate %>% unlist)
     forecast <- rowMeans(do.call(cbind, ASs))
     return(forecast)
   }
-  multiple_DC <- function(adjclose, close, risk, spans=c(20, 40, 80, 160, 320), scalars=c(0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
+  multiple_DC <- function(adjclose, close, risk, spans=c(10, 20, 40, 80, 160, 320), scalars=c(0.60, 0.67, 0.70, 0.73, 0.74, 0.74), cap=20, period=252) {
     n <- length(spans)
     DCs <- lapply(1:n, function(i) {dc <- DonchianChannel(adjclose, spans[i]); (adjclose - dc[,2]) / abs(dc[,1] - dc[,3])})
     DCs <- lapply(1:n, function(i) EMA(na.locf(DCs[[i]], na.rm=F) * 40, spans[i]/4) * scalars[i] )
@@ -916,16 +916,16 @@ print(res$Aggregate %>% unlist)
                        "ES","ZW","HS","NY","LX", "BT")
     CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","NG","OJ","ZR","ZS","SW","ZW","ZS","HS","ES","AE","NY","BT")
     Assets_all <- BackAdj
-    Assets <- BackAdj
+    Assets <- CMC[CMC_selection] #BackAdj[CMC_selection] #
     results <- list();  forecasts <- list();  exposures <- list();returns <- list(); vols <- list();strategies <- list()
     target_vol <- 0.25
     IDM = 2.5
-    FDMtrend <- 1.33
+    FDMtrend <- 1.75 #1.33
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1.0 # 1.5
-    starting_year <- 2000
+    FDM <- 1.5 # 1.5
+    starting_year <- 2024
     directional_only <- 0 # 0: bidirectional, -1: short only, 1: long only
     # Penalize short positions (NULL to disable)
     short_penality <- 0.75
@@ -935,7 +935,7 @@ print(res$Aggregate %>% unlist)
     symbol_wise <- TRUE
     # Strategies weights
     weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
-    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=1, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=2/3, "Carry"=0, "Skew"=1/3, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1108,8 +1108,8 @@ print(res$Aggregate %>% unlist)
   CMC <- list()
   dir <- "/home/marco/trading/Systems/Monopoly/ExecuteATFS/Data/Current"
   for(file in list.files(dir, ".*csv")){
-    df <- read_csv(paste0(dir,"/",file), show_col_types = FALSE) %>% mutate(AdjClose=Close)
-    CMC[[file]] <- df
+    df <- read_csv(paste0(dir,"/",file), show_col_types = FALSE) %>% mutate(AdjClose=Close) %>% arrange(Date)
+    CMC[[file %>% sub(".csv", "", .) %>% toupper()]] <- df
   }
 }
 

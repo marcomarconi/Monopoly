@@ -166,6 +166,7 @@
   instrument_file <- paste0(main_dir, "INSTRUMENTS.csv")
   portfolio_file <- paste0(main_dir, "PORTFOLIO.csv")
   FX_file <- paste0(main_dir, "FX.csv")
+  FX_file_manual <- paste0(main_dir, "FX_data.csv")
   scrape_dir <- paste0(main_dir, "Data/Scrape/")
   #historical_dir <- paste0(main_dir, "Data/Historical/")
   current_dir <- paste0(main_dir, "Data/Current/")
@@ -173,12 +174,12 @@
   logs_dir <- paste0(main_dir, "Logs/")
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
-  target_vol <- 0.275
-  IDM <- 2.5
+  target_vol <- 0.3
+  IDM <- 2.3
   FDMtrend <- 1.75 # 
   FDMcarry <- 2.5 # 
-  FDMskew <- 1.2 # 
-  FDM <- 1.5
+  FDMskew <- 1.0 # 
+  FDM <- 1.75
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
   position_buffering_level <- 2.5 # in backtest daily SD is ~1
@@ -266,18 +267,20 @@ skip_download <- opt$skipdownload
   }
   
   # load FX data from previous scrape
-  print("")
-  print("Loading FX data...")
-  FX_names <- read_csv(FX_file, col_names = FALSE, show_col_types = FALSE) %>% unlist 
-  files <- list()
-  for(fx in FX_names) {
-    cat(paste(fx, ""))
-    f <- read_csv(paste0(FX_dir, "/", fx, ".csv"), col_names = TRUE, show_col_types = FALSE)
-    colnames(f) <- c("Date", "Rate")
-    files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(1)
-  }
-  FX_rates <- do.call(rbind, files) %>% mutate(FX=toupper(sub("eur", "", FX_names))) 
-  colnames(FX_rates) <- c("Date", "Rate", "FX")
+  # print("")
+  # print("Loading FX data...")
+  # FX_names <- read_csv(FX_file, col_names = FALSE, show_col_types = FALSE) %>% unlist 
+  # files <- list()
+  # for(fx in FX_names) {
+  #   cat(paste(fx, ""))
+  #   f <- read_csv(paste0(FX_dir, "/", fx, ".csv"), col_names = TRUE, show_col_types = FALSE)
+  #   colnames(f) <- c("Date", "Rate")
+  #   files[[fx]] <- arrange(f, Date) %>% na.locf(na.rm=FALSE) %>% tail(1)
+  # }
+  # FX_rates <- do.call(rbind, files) %>% mutate(FX=toupper(sub("eur", "", FX_names))) 
+  # colnames(FX_rates) <- c("Date", "Rate", "FX")
+  
+  FX_rates <- read_csv(FX_file_manual, show_col_types = FALSE)
   
   # the covariance matrix
   print("Calculate covariance matrix...")

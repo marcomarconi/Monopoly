@@ -334,26 +334,21 @@ rollover_curve <- function(df, forward=2, lm=FALSE) {
   
 }
 
-runZscore <- function(x, n=10) {
-  return((x-runMean(x, n))/runSD(x, n))
-}
-
-
 ### Load futures data and calculate stuff
 {
   stop("Do not execute.")
   ## Load futures contracts and backadjust them
   {
   setwd( "/home/marco/trading/HistoricalData/Barchart/Futures/")
-  to_load <- read_csv("Instrument_List.csv")
+  to_load <- read_csv("Instrument_List.csv", show_col_types = FALSE)
   # load the full futures contracts
   Futures <- list()
   for(i in 1:nrow(to_load) ){
     symbol <- as.character(to_load[i,1])
     if(!is.null(Futures[[symbol]]))
       next
-    print(symbol)
     dir <- as.character(to_load[i,2])
+    print(c(symbol, dir))
     Futures[[symbol]] <- load_future_contracts_wide(symbol, dir)
   }
   write_rds(Futures, "/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
