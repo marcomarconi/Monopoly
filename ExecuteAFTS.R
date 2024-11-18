@@ -174,15 +174,15 @@
   logs_dir <- paste0(main_dir, "Logs/")
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
-  target_vol <- 0.3
-  IDM <- 2.3
+  target_vol <- 0.20
+  IDM <- 2.4
   FDMtrend <- 1.75 # 
   FDMcarry <- 2.5 # 
   FDMskew <- 1.0 # 
   FDM <- 1.75
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
-  position_buffering_level <- 2.5 # in backtest daily SD is ~1
+  position_buffering_level <- 3.0 # in backtest daily SD is ~1
   short_penality <- 0.75 # Penalize short positions (NULL to disable)
   use_dynamic_portfolio <- FALSE
   portfolio_buffering_level <- 0.1

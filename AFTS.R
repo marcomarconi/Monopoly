@@ -16,7 +16,7 @@
   
 }
 
-
+# Created in Futures.R
 Futures <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/Futures.RDS")
 BackAdj <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/BackAdj.RDS")
 

@@ -46,7 +46,11 @@ while IFS=, read -r w1 w2 w3 w4 w5 w6 w7 w8 w9 w10; do
   echo $w1 $w2 $w3
   f=$w1
   scrape_tmp=_scrape.$f.html
+  # Old version not working anymore, which saved to CSV
   curl -sS "https://query1.finance.yahoo.com/v7/finance/download/$f?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > $scrape_tmp
+  # New version which saves to JSON
+  #curl -sS "https://query2.finance.yahoo.com/v8/finance/chart/$f?period1="$start_date"&period2="$end_date"&interval=1d&events=history&includeAdjustedClose=true" > _json
+  #jq -r 'chart.result[0] | .timestamp as $timestamps | .indicators.quote[0] as $quote | .indicators.adjclose[0].adjclose as $adjclose | [range(0; length)] as $index | $index[] as $i |$timestamps[$i], $quote.low[$i], $quote.close[$i], $quote.open[$i], $quote.high[$i], $quote.volume[$i], $adjclose[$i]] | @csv' > 
   sed -i 's/null/NA/g' $scrape_tmp
   cut -f 1,6 -d "," $scrape_tmp | tail -n +2 > $scrape_dir/$w2/$today.$w2.intraday # not really intraday, but we call it like this in compatibility with above CMC data
   head -n 2 $scrape_dir/$w2/$today.$w2.intraday > $scrape_dir/$w2/$today.$w2.weekly # fake weekly data
