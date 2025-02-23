@@ -17,8 +17,8 @@
 }
 
 # Created in Futures.R
-Futures <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/Futures.RDS")
-BackAdj <- read_rds("/home/marco/trading/Systems/Monopoly/Data/RDSs/BackAdj.RDS")
+Futures <- read_rds("/home/marco/trading/HistoricalData/Barchart/Futures.RDS")
+BackAdj <- read_rds("/home/marco/trading/HistoricalData/Barchart/BackAdj.RDS")
 
 # All book's strategies
 {
@@ -912,30 +912,32 @@ print(res$Aggregate %>% unlist)
   {
     # A subset of instrument I might actually trade
     CMC_selection_ <- c("ZN","G","GG","CC","CA","KC","RM","HG","ZC","CT","CL","RB","HO", "LF", "PL","PA", 
-                       "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZR","ZC","SW","ZM",
+                       "SI", "GC","HE","GF", "LE","LS","NG","ZO", "OJ","ZR","ZS","ZL","ZC","SW","ZM",
                        "ES","ZW","HS","NY","LX", "BT")
-    CMC_selection <- c("ZN","CA","RM","HG","CT","CL","GC","HE","LE","NG","OJ","ZR","ZS","SW","ZW","ZS","HS","ES","AE","NY","BT")
+    CMC_selection <- c("ZF","CC","RM","HG","CT","CL","GC","HE","GF","NG","OJ","ZR","SW","ZW","ZS","HS","ES","NY")
     Assets_all <- BackAdj
-    Assets <- CMC[CMC_selection] #BackAdj[CMC_selection] #
+    Assets <- BackAdj #[CMC_selection] #CMC[CMC_selection] #
+    Assets$AL <-NULL
     results <- list();  forecasts <- list();  exposures <- list();returns <- list(); vols <- list();strategies <- list()
-    target_vol <- 0.25
-    IDM = 2.5
+    target_vol <- 0.20
+    IDM = 2.4
     FDMtrend <- 1.75 #1.33
     FDMcarry <- 1.05 
     FDMcsm <- 1.4
     FDMskew <- 1.18
-    FDM <- 1.5 # 1.5
-    starting_year <- 2024
+    FDM <- 1.0 # 1.5
+    starting_year <- 2000
     directional_only <- 0 # 0: bidirectional, -1: short only, 1: long only
+    position_buffering <- 0
     # Penalize short positions (NULL to disable)
-    short_penality <- 0.75
+    short_penality <- NULL
     # Apply relative volatility
     relative_vol <- FALSE
     # Symbol-wise results
     symbol_wise <- TRUE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0.5, "Carry"=0.25, "Skew"=0.25, "CSM"=0,"Test"=0)
-    weights <- list("Long"=0, "Trend"=2/3, "Carry"=0, "Skew"=1/3, "CSM"=0,"Test"=0)
+    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=1)
+    #weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=1, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
     # Asset class indices
@@ -1008,7 +1010,7 @@ print(res$Aggregate %>% unlist)
       }
       
       if(weights[["Test"]]  > 0) {
-        df$ForecastTest <- -multiple_CR(df$Return) 
+        df$ForecastTest <- sign(RSI2(df$AdjClose, 40)) * 75
         df$ForecastTest <- cap_forecast(df$ForecastTest)
         
       }   
@@ -1064,6 +1066,26 @@ print(res$Aggregate %>% unlist)
         df$Position <- ifelse(df$Forecast < 0, df$Position*short_penality, df$Position)
         df$Position <- ifelse(df$Forecast > 0, df$Position*(1+(1-short_penality)), df$Position)
       }
+      
+      df$ForecastRaw <- df$Forecast
+      df$ForecastRaw[is.na(df$ForecastRaw)] <- 0
+      df$Forecast[is.na(df$Forecast)] <- 0
+      
+      # Simulate buffering
+      {
+        df$Forecast <- rep(0, length(df$ForecastRaw));
+        if(position_buffering > 0) {
+          for(i in 2:length(df$ForecastRaw)) { 
+            df$Forecast[i] <- df$Forecast[i-1]; 
+            if(abs(df$Forecast[i] - df$ForecastRaw[i]) >= position_buffering) 
+              df$Forecast[i] <- df$ForecastRaw[i];   
+          }
+        }
+        else {
+          df$Forecast <- df$ForecastRaw }
+      }
+      
+      
       df$Excess <- lag(df$Position * df$Forecast/10) * df$Return * IDM 
       df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 

@@ -1,4 +1,5 @@
 ## This file contains important procedures to process futures contracts data and create back-adjusted prices
+## Go to the "Load futures data and calculate stuff" to update RDS files for future backadjusted data
 
 {
   library(tidyverse)
