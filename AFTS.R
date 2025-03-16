@@ -916,8 +916,7 @@ print(res$Aggregate %>% unlist)
                        "ES","ZW","HS","NY","LX", "BT")
     CMC_selection <- c("ZF","CC","RM","HG","CT","CL","GC","HE","GF","NG","OJ","ZR","SW","ZW","ZS","HS","ES","NY")
     Assets_all <- BackAdj
-    Assets <- BackAdj #[CMC_selection] #CMC[CMC_selection] #
-    Assets$AL <-NULL
+    Assets <- BackAdj[CMC_selection] #CMC[CMC_selection] #
     results <- list();  forecasts <- list();  exposures <- list();returns <- list(); vols <- list();strategies <- list()
     target_vol <- 0.20
     IDM = 2.4
@@ -934,9 +933,9 @@ print(res$Aggregate %>% unlist)
     # Apply relative volatility
     relative_vol <- FALSE
     # Symbol-wise results
-    symbol_wise <- TRUE
+    symbol_wise <- FALSE
     # Strategies weights
-    weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=1)
+    weights <- list("Long"=0, "Trend"=1, "Carry"=0, "Skew"=0, "CSM"=0,"Test"=0)
     #weights <- list("Long"=0, "Trend"=0, "Carry"=0, "Skew"=1, "CSM"=0,"Test"=0)
     if(sum(unlist(weights)) != 1)
       stop("Strategy weights do not sum to zero")
@@ -951,7 +950,7 @@ print(res$Aggregate %>% unlist)
         NPs[[n]] <- select(df, Date, Symbol, Class, NP, dNP)
       }
       allNPs <- do.call(rbind, NPs)
-      Asset_class_indices <- group_by(allNPs, Class, Date) %>% summarise(Symbol=Symbol, R=mean(dNP)) %>% 
+      Asset_class_indices <- group_by(allNPs, Class, Date) %>% reframe(Symbol=Symbol, R=mean(dNP)) %>% 
         arrange(Class, Date) %>% select(-Symbol)  %>%  unique %>% group_by( Class) %>% mutate(A=cumsum(R)) %>% ungroup()
     }
     # iterate over symbols
@@ -1010,8 +1009,12 @@ print(res$Aggregate %>% unlist)
       }
       
       if(weights[["Test"]]  > 0) {
-        df$ForecastTest <- sign(RSI2(df$AdjClose, 40)) * 75
-        df$ForecastTest <- cap_forecast(df$ForecastTest)
+        rate <- 256*10
+        if(nrow(df) >= rate) {
+        forecast <- c(rep(NA, rate), diff(df$AdjClose, lag=rate)) / (rate)
+        forecast <- EMA(-forecast / df$Volatility, 64)
+        df$ForecastTest <- cap_forecast(forecast*10)
+        }
         
       }   
       
@@ -1086,7 +1089,7 @@ print(res$Aggregate %>% unlist)
       }
       
       
-      df$Excess <- lag(df$Position * df$Forecast/10) * df$Return * IDM 
+      df$Excess <- lag(df$Position * df$Forecast/10, 1) * df$Return * IDM 
       df <- filter(df, year(Date) >= starting_year)
       forecasts[[symbol]]  <-   select(df, Date, Forecast) 
       exposures[[symbol]]  <-  mutate(df, Exposure=Position * Forecast/10) %>% select(Date, Exposure) 

@@ -161,7 +161,7 @@
 
 # Parameters (maybe put them in a config file?)
 {
-  main_dir <- "/home/marco/trading/Systems/Monopoly/ExecuteATFS/"
+  main_dir <- "/home/marco/trading/Systems/Monopoly/ExecuteAFTS/"
   positions_file <- paste0(main_dir, "POSITIONS.csv")
   instrument_file <- paste0(main_dir, "INSTRUMENTS.csv")
   portfolio_file <- paste0(main_dir, "PORTFOLIO.csv")
@@ -175,7 +175,7 @@
   plots_dir <- paste0(main_dir, "Logs/Plots/")
   scrape_script <- "SCRAPE_DAILY_DATA.sh"
   target_vol <- 0.20
-  IDM <- 2.4
+  IDM <- 2.5
   FDMtrend <- 1.75 # 
   FDMcarry <- 2.5 # 
   FDMskew <- 1.0 # 

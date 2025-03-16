@@ -751,41 +751,7 @@ rollover_curve <- function(df, forward=2, lm=FALSE) {
     ggsave(filename = paste0(symbol, "_weekmonth.png"), p, width=12, height=9,dpi=150)
   }
   }
-  ## Done fot RobotWealth
-  {
-  all <- list()
-  for(symbol in names(BackAdj)){
-    print(symbol)
-    df <- BackAdj[[symbol]] %>% filter(year(Date) >= 2000)
-    name <-  BackAdj[[symbol]]$Name[1]
-    df$Volatility <- calculate_volatility(df$Return)
-    df$Return <- df$Return / df$Volatility * sqrt(252) # Seasonality adjusted, comment it if unwanted
-    all[[name]] <- df
-  }
-  df <- do.call(rbind, all)
-  {
-    setwd("~")
-    type<-"Debt"
-    a <- group_by(df, Name, wday=lubridate::wday(Date), year=year(Date)) %>%filter(Class==type & wday %in% 2:6) %>%
-      summarise(Mean=mean(Return, na.rm=T))
-    b <- group_by(a, Name, wday) %>% na.omit %>% summarize(M=mean(Mean), SD=2*sd(Mean)/sqrt(n()))
-    p <- ggplot(a) + geom_point(aes(x=jitter(wday), y=Mean), fill="grey90", color="gray20", pch=21, size=2) +  scale_x_continuous(labels=c("Mon","Tue","Wed","Thu","Fri")) +
-      geom_errorbar(data=b, aes(x=wday, ymin=M-SD, ymax=M+SD), width=0.25, linewidth=2) +  geom_hline(yintercept = 0)  + facet_wrap(~Name)+
-      theme(legend.position = "None", axis.title = element_blank(), axis.text = element_text(size=12), plot.title = element_text(hjust = 0.5, size=18, face = "bold"),panel.grid.minor = element_line(linewidth = 0.5), panel.grid.major = element_line(linewidth = 0.5), strip.text = element_text(size=10, margin = margin(0.1,0,0.1,0, "cm"))) + ggtitle(type ) +
-      ylim(c(-0.5, 0.5))
-    ggsave(filename = paste0(type, "_week.png"), p, width=16, height=12,dpi=300)
-    a <- mutate(df, Name, dom = mday(Date), year=year(Date)) %>%filter(Class==type)  %>% mutate(W = case_when(dom <= 7 ~ 1, dom > 7 & dom <= 14 ~ 2, dom > 14 & dom <= 21 ~ 3, dom > 21 & dom <= 31 ~ 4, TRUE ~ 0)) %>% 
-      group_by(Name, W, year) %>% summarise( Mean=mean(Return, na.rm=T)) %>% na.omit
-    b <- group_by(a, Name, W) %>% na.omit %>% summarize(M=mean(Mean), SD=2*sd(Mean)/sqrt(n()))
-    p <- ggplot(a) +  geom_point(aes(x=jitter(W), y=Mean), fill="grey90", color="gray20", pch=21, size=2)  + 
-      facet_wrap(~Name)+
-      geom_errorbar(data=b, aes(x=W, ymin=M-SD, ymax=M+SD), width=0.25, linewidth=2) + geom_hline(yintercept = 0)  + 
-      theme(legend.position = "None", axis.title = element_blank(), axis.text = element_text(size=12), plot.title = element_text(hjust = 0.5, size=18, face = "bold"),panel.grid.minor = element_line(linewidth = 0.5), panel.grid.major = element_line(linewidth = 0.5), strip.text = element_text(size=10, margin = margin(0.1,0,0.1,0, "cm"))) + ggtitle(type )+
-      ylim(c(-0.5, 0.5))
-    ggsave(filename = paste0(type, "_month.png"), p, width=16, height=12,dpi=300)
-    
-  }
-  }
+  
   ## Create data.frames to plot animated forward curve
   {
   forward <- 20
