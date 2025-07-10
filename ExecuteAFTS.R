@@ -183,7 +183,7 @@
   strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
   corr_length <- 25 # weekly correlation window
   position_buffering_level <- 3.0 # in backtest daily SD is ~1
-  short_penality <- 0.75 # Penalize short positions (NULL to disable)
+  short_penality <- NULL # Penalize short positions (NULL to disable)
   use_dynamic_portfolio <- FALSE
   portfolio_buffering_level <- 0.1
   trade_shadow_cost <- 0
