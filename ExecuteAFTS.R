@@ -180,7 +180,7 @@
   FDMcarry <- 2.5 # 
   FDMskew <- 1.0 # 
   FDM <- 1.75
-  strategy_weights <- list("Trend" = 0.5, "Carry" = 0.25, "Skew" = 0.25)
+  strategy_weights <- list("Trend" = 0.5, "Carry" = 0.5, "Skew" = 0.0)
   corr_length <- 25 # weekly correlation window
   position_buffering_level <- 3.0 # in backtest daily SD is ~1
   short_penality <- NULL # Penalize short positions (NULL to disable)
