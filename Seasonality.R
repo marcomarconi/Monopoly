@@ -133,7 +133,7 @@ with(a, mean(Excess)/sd(Excess)*sqrt(52))
 
 # GAS
 {
-df <- BackAdj[["NG"]] %>% filter(year(Date) > 2000)
+df <- BackAdj[["JBB"]]# %>% filter(year(Date) > 2000)
 a <- 
   mutate(df, dom = mday(Date)) %>% mutate(dom = case_when(dom <= 7 ~ 1, dom > 7 & dom <= 14 ~ 2, dom > 14 & dom <= 21 ~ 3, dom > 21 & dom <= 31 ~ 4, TRUE ~ 0)) %>% 
   mutate(df, date=yearweek(Date), dow=wday(Date)) %>% 
@@ -146,6 +146,16 @@ a <-
 ggplot(a) + geom_line(aes(date, PnL), linewidth=2)
 with(a, mean(Excess)/sd(Excess)*sqrt(52))
 # 0.7323059
+# Winter trades
+a <- mutate(df, dom = month(Date))  %>% 
+  mutate(df, date=yearweek(Date)) %>% 
+  mutate(Spread = 0) %>% 
+  mutate(Position = 1 / calculate_volatility(df$Return)) %>% mutate(Position = ifelse(!is.na(Position), Position, 0)) %>% 
+  mutate(Trade = case_when((dom %in% c(3,4,5)) ~ 1, TRUE ~ 0)) %>% 
+  mutate(Excess = Return * Trade, Cost = Spread * Position) %>% 
+  mutate(PnL=cumsum(Excess %>% replace_na(0))) 
+ggplot(a) + geom_line(aes(Date, PnL), linewidth=2)
+
 }
 
 # OJ

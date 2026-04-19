@@ -454,22 +454,22 @@ rollover_curve <- function(df, forward=2, lm=FALSE) {
              SpreadLogAdj = SpreadLog / SpreadVol
              ) %>%   ungroup %>%    na.omit()
     # Plot the spreads
-    # p <- ggplot(spreads_returns, aes(x=Date, y=SpreadLog, color=Contracts)) + geom_line(linewidth=1) + ggtitle(symbol) + scale_color_colorblind()
-    # ggsave(paste(symbol, "_Spreads.png"), p, width=15, height = 9, dpi=100)
-    # res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(SpreadCumulative = cumsum(SpreadReturn))
-    # p <- ggplot(res, aes(x=Date, y=SpreadCumulative, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
-    # ggsave(paste(symbol, "_SpreadCumulative.png"), p, width=15, height = 9, dpi=100)
-    # # Volatility of the spreads compared to the front outright contract
-    # res <- rbind(spreads_returns %>% mutate(Volatility = runSD(Return1, 32)) %>% select(Volatility) %>% mutate(Contracts=" Front"), 
-    #            spreads_returns  %>% mutate(Volatility=SpreadVol) %>% select(Contracts, Volatility)) %>% mutate(Volatility=Volatility*sqrt(252)) %>% na.omit %>%
-    #   group_by(Contracts) %>% reframe(M=mean(Volatility), S=sd(Volatility)*1) 
-    # p <- ggplot(res, aes(x=Contracts, y=M, ymin=M-S, ymax=M+S)) + geom_pointrange(linewidth=1, size=1)
-    # ggsave(paste(symbol, "_VolSpread.png"), p, width=15, height = 9, dpi=100)
-    ## Performance of trading the front spread by DTE
-    # res <-  spreads_returns %>%  mutate(Decile = round(DTE1 / 10)) %>% filter(Decile < 10) %>%
-    #   group_by(Contracts, Decile) %>% reframe(M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
-    # p <- ggplot(res) + geom_errorbar(aes(x=Decile, ymin=M-S, ymax=M+S), width=0.5) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
-    # ggsave(paste(symbol, "_DTE.png"), p, width=15, height = 9, dpi=100)
+    p <- ggplot(spreads_returns, aes(x=Date, y=SpreadLog, color=Contracts)) + geom_line(linewidth=1) + ggtitle(symbol) + scale_color_colorblind()
+    ggsave(paste(symbol, "_Spreads.png"), p, width=15, height = 9, dpi=100)
+    res <-  spreads_returns %>% group_by(Contracts) %>%  arrange(Date) %>%  mutate(SpreadCumulative = cumsum(SpreadReturn))
+    p <- ggplot(res, aes(x=Date, y=SpreadCumulative, color=Contracts)) + geom_line(linewidth=2) + ggtitle(symbol) + scale_color_colorblind()
+    ggsave(paste(symbol, "_SpreadCumulative.png"), p, width=15, height = 9, dpi=100)
+    # Volatility of the spreads compared to the front outright contract
+    res <- rbind(spreads_returns %>% mutate(Volatility = runSD(Return1, 32)) %>% select(Volatility) %>% mutate(Contracts=" Front"),
+               spreads_returns  %>% mutate(Volatility=SpreadVol) %>% select(Contracts, Volatility)) %>% mutate(Volatility=Volatility*sqrt(252)) %>% na.omit %>%
+      group_by(Contracts) %>% reframe(M=mean(Volatility), S=sd(Volatility)*1)
+    p <- ggplot(res, aes(x=Contracts, y=M, ymin=M-S, ymax=M+S)) + geom_pointrange(linewidth=1, size=1)
+    ggsave(paste(symbol, "_VolSpread.png"), p, width=15, height = 9, dpi=100)
+    # Performance of trading the front spread by DTE
+    res <-  spreads_returns %>%  mutate(Decile = round(DTE1 / 10)) %>% filter(Decile < 10) %>%
+      group_by(Contracts, Decile) %>% reframe(M=mean(scaledreturns, na.rm=T), S=sd(scaledreturns, na.rm=T)/sqrt(n())*2)
+    p <- ggplot(res) + geom_errorbar(aes(x=Decile, ymin=M-S, ymax=M+S), width=0.5) + facet_wrap(~Contracts, scales = "free")  + geom_hline(yintercept = 0)+scale_x_continuous(breaks = 0:9)
+    ggsave(paste(symbol, "_DTE.png"), p, width=15, height = 9, dpi=100)
     ## Performance of trading the front spread, conditional on predictors
     lagging <- 2
     res_ <- spreads_returns %>%  group_by(Contracts) %>%  arrange(Date) %>%  filter(n() > 252+32) %>% mutate(
@@ -737,8 +737,8 @@ rollover_curve <- function(df, forward=2, lm=FALSE) {
     a <- mutate(df, dom = mday(Date)) %>% mutate(W = case_when(dom <= 5 ~ "BOM", dom >= 27 ~ "EOM", TRUE ~ NA)) %>% group_by(W) %>% summarise(Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n())) %>% na.omit
     p <- ggplot(a) + geom_bar(aes(W, Mean), stat="identity") + geom_errorbar(aes(x=W, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_TOM.png"), p, width=12, height=9,dpi=150)
-    a <- group_by(df, week(Date)) %>% summarise(Week=first(week(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
-    p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
+    a <- group_by(df, month(Date)) %>% summarise(Month=first(month(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
+    p <- ggplot(a) + geom_bar(aes(Month, Mean), stat="identity") + geom_errorbar(aes(x=Month, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_yearly.png"), p, width=12, height=9,dpi=150)
     a <- group_by(df, mday(Date)) %>% summarise(Day=first(mday(Date)), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
     p <- ggplot(a) + geom_bar(aes(Day, Mean), stat="identity") + geom_errorbar(aes(x=Day, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
@@ -749,6 +749,11 @@ rollover_curve <- function(df, forward=2, lm=FALSE) {
     a <- mutate(df, dom = mday(Date)) %>% mutate(W = case_when(dom <= 7 ~ 1, dom > 7 & dom <= 14 ~ 2, dom > 14 & dom <= 21 ~ 3, dom > 21 & dom <= 31 ~ 4, TRUE ~ 0)) %>% group_by(W) %>% summarise(Week=first(W), Mean=mean(Return, na.rm=T), SD=2*sd(Return, na.rm=T)/sqrt(n()))
     p <- ggplot(a) + geom_bar(aes(Week, Mean), stat="identity") + geom_errorbar(aes(x=Week, ymin=Mean-SD, ymax=Mean+SD), width=0.5)
     ggsave(filename = paste0(symbol, "_weekmonth.png"), p, width=12, height=9,dpi=150)
+    r <- sqrt(nrow(df)/12)*3
+    a <- group_by(df, YearMonth=yearmonth(Date)) %>% reframe(YearMonth=first(YearMonth), PnL=sum(replace_na(Return,0))) %>% group_by(Month=month(YearMonth)) %>%  mutate(Eq=cumsum(PnL))
+    p <- a %>% ggplot(aes(YearMonth, Eq, color=Month, group=Month)) + geom_line(size=2) + geom_hline(yintercept = c(-r,r), linetype="dashed") + scale_color_gradient(low = "red", high = "blue")
+    ggsave(filename = paste0(symbol, "_yearly_backtest.png"), p, width=12, height=9,dpi=150)
+    
   }
   }
   
